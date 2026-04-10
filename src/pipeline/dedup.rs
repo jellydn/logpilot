@@ -21,19 +21,50 @@ static UUID_RE: Lazy<regex::Regex> = Lazy::new(|| {
 static HEXADDR_RE: Lazy<regex::Regex> =
     Lazy::new(|| regex::Regex::new(r"0x[0-9a-fA-F]+").expect("Invalid hex address regex"));
 
+const MAX_DEDUP_SIGNATURES: usize = 100_000;
+
 /// SimHash-based deduplicator for fuzzy matching of log entries
 pub struct Deduplicator {
     /// Store hashes of seen entries (signature -> simhash)
+    /// Limited to MAX_DEDUP_SIGNATURES to prevent unbounded growth
     signatures: HashMap<String, u64>,
     /// Threshold for considering two entries similar (Hamming distance)
     similarity_threshold: u32,
+    /// Counter for FIFO eviction
+    insert_count: u64,
+    /// Track insertion order for eviction (signature -> insert order)
+    insertion_order: HashMap<String, u64>,
 }
 
 impl Deduplicator {
     pub fn new() -> Self {
         Self {
-            signatures: HashMap::new(),
+            signatures: HashMap::with_capacity(MAX_DEDUP_SIGNATURES),
             similarity_threshold: 3, // Allow up to 3 bits difference
+            insert_count: 0,
+            insertion_order: HashMap::with_capacity(MAX_DEDUP_SIGNATURES),
+        }
+    }
+
+    /// Evict oldest entries when size limit reached
+    fn evict_if_needed(&mut self) {
+        if self.signatures.len() >= MAX_DEDUP_SIGNATURES {
+            // Find and remove oldest 20% of entries
+            let to_remove = (MAX_DEDUP_SIGNATURES / 5).max(1);
+            let threshold = self.insert_count - to_remove as u64;
+
+            let old_keys: Vec<String> = self
+                .insertion_order
+                .iter()
+                .filter(|(_, &order)| order < threshold)
+                .take(to_remove)
+                .map(|(k, _)| k.clone())
+                .collect();
+
+            for key in old_keys {
+                self.signatures.remove(&key);
+                self.insertion_order.remove(&key);
+            }
         }
     }
 
@@ -125,9 +156,15 @@ impl Deduplicator {
 
     /// Add an entry to the deduplication index
     pub fn add_signature(&mut self, entry: &LogEntry, signature: String) {
+        // Evict old entries if at capacity
+        self.evict_if_needed();
+
         let normalized = Self::normalize_content(&entry.raw_content);
         let hash = Self::compute_simhash(&normalized);
-        self.signatures.insert(signature, hash);
+        self.signatures.insert(signature.clone(), hash);
+        self.insertion_order
+            .insert(signature.clone(), self.insert_count);
+        self.insert_count += 1;
     }
 
     /// Get the number of unique signatures stored

@@ -31,7 +31,9 @@ impl McpServer {
                     "logpilot://session/{name}/alerts".to_string(),
                 ],
             },
-            tools: Some(crate::mcp::protocol::ToolsCapabilities { list_changed: false }),
+            tools: Some(crate::mcp::protocol::ToolsCapabilities {
+                list_changed: false,
+            }),
         };
 
         // Get or initialize the global data store for live data access
@@ -56,7 +58,9 @@ impl McpServer {
                     "logpilot://session/{name}/alerts".to_string(),
                 ],
             },
-            tools: Some(crate::mcp::protocol::ToolsCapabilities { list_changed: false }),
+            tools: Some(crate::mcp::protocol::ToolsCapabilities {
+                list_changed: false,
+            }),
         };
 
         Self {
@@ -262,24 +266,9 @@ impl McpServer {
                     .and_then(|s| s.as_str())
                     .unwrap_or("");
 
-                let session_data = self.data_store.get_session(session).await;
-                let stats = if let Some(data) = session_data {
-                    let error_count = data
-                        .entries
-                        .iter()
-                        .filter(|e| matches!(e.severity, crate::models::Severity::Error | crate::models::Severity::Fatal))
-                        .count();
-                    format!(
-                        "Session: {}\nTotal entries: {}\nErrors/Fatal: {}\nPatterns: {}\nIncidents: {}\nAlerts: {}",
-                        session,
-                        data.entries.len(),
-                        error_count,
-                        data.patterns.len(),
-                        data.incidents.len(),
-                        data.alerts.len()
-                    )
-                } else {
-                    format!("Session '{}' not found", session)
+                let stats = match self.get_session_stats(session).await {
+                    Ok(s) => s,
+                    Err(e) => format!("Error getting stats for '{}': {}", session, e),
                 };
 
                 ToolsCallResult {
@@ -489,6 +478,97 @@ impl McpServer {
         debug!("Sending: {}", json);
         writeln!(writer, "{}", json)?;
         writer.flush()
+    }
+
+    /// Get stats for a session, capturing from tmux if not in data store
+    async fn get_session_stats(&self, session_name: &str) -> anyhow::Result<String> {
+        use crate::capture::tmux::TmuxCommand;
+        use crate::models::LogEntry;
+        use crate::pipeline::parser::LogParser;
+        use tokio::process::Command;
+
+        // First try data store (if watch is running)
+        if let Some(data) = self.data_store.get_session(session_name).await {
+            let error_count = data
+                .entries
+                .iter()
+                .filter(|e| {
+                    matches!(
+                        e.severity,
+                        crate::models::Severity::Error | crate::models::Severity::Fatal
+                    )
+                })
+                .count();
+            return Ok(format!(
+                "Session: {}\nTotal entries: {}\nErrors/Fatal: {}\nPatterns: {}\nIncidents: {}\nAlerts: {}\n(Source: live data)",
+                session_name,
+                data.entries.len(),
+                error_count,
+                data.patterns.len(),
+                data.incidents.len(),
+                data.alerts.len()
+            ));
+        }
+
+        // Otherwise, capture a snapshot from tmux
+        // Verify session exists
+        if !TmuxCommand::session_exists(session_name).await? {
+            return Ok(format!("Session '{}' not found", session_name));
+        }
+
+        // Get panes
+        let panes = TmuxCommand::list_panes(session_name).await?;
+        if panes.is_empty() {
+            return Ok(format!("No panes found in session '{}'", session_name));
+        }
+
+        // Capture from each pane
+        let mut total_entries = 0;
+        let mut error_count = 0;
+        let parser = LogParser::new();
+
+        for pane in panes {
+            let output = Command::new("tmux")
+                .args(["capture-pane", "-p", "-t", &pane, "-S", "-100"])
+                .output()
+                .await?;
+
+            if !output.status.success() {
+                continue;
+            }
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+
+                let mut entry = LogEntry::new(
+                    uuid::Uuid::nil(),
+                    total_entries as u64,
+                    chrono::Utc::now(),
+                    trimmed.to_string(),
+                );
+                parser.parse(&mut entry);
+                total_entries += 1;
+
+                if matches!(
+                    entry.severity,
+                    crate::models::Severity::Error | crate::models::Severity::Fatal
+                ) {
+                    error_count += 1;
+                }
+            }
+        }
+
+        Ok(format!(
+            "Session: {}\nTotal entries: {}\nErrors/Fatal: {}\n(Source: snapshot capture)\nNote: Run 'logpilot watch {}' for live monitoring",
+            session_name,
+            total_entries,
+            error_count,
+            session_name
+        ))
     }
 }
 

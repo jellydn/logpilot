@@ -411,7 +411,9 @@ mod tests {
                 resources: ResourceCapabilities {
                     supported_uris: vec!["logpilot://session/{name}/summary".to_string()],
                 },
-                tools: Some(ToolsCapabilities { list_changed: false }),
+                tools: Some(ToolsCapabilities {
+                    list_changed: false,
+                }),
             },
             server_info: ServerInfo {
                 name: "logpilot".to_string(),
