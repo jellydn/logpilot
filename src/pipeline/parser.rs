@@ -153,6 +153,13 @@ impl Default for LogParser {
 mod tests {
     use super::*;
 
+    fn test_entry(content: &str) -> LogEntry {
+        let fixed_ts = "2024-01-01T00:00:00Z"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .unwrap();
+        LogEntry::new(uuid::Uuid::new_v4(), 1, fixed_ts, content.to_string())
+    }
+
     #[test]
     fn test_parse_severity() {
         let parser = LogParser::new();
@@ -166,12 +173,7 @@ mod tests {
         ];
 
         for (content, expected) in cases {
-            let mut entry = LogEntry::new(
-                uuid::Uuid::new_v4(),
-                1,
-                chrono::Utc::now(),
-                content.to_string(),
-            );
+            let mut entry = test_entry(content);
             parser.parse(&mut entry);
             assert_eq!(entry.severity, expected, "Failed for: {}", content);
         }
@@ -193,12 +195,7 @@ mod tests {
         ];
 
         for (content, expected) in cases {
-            let mut entry = LogEntry::new(
-                uuid::Uuid::new_v4(),
-                1,
-                chrono::Utc::now(),
-                content.to_string(),
-            );
+            let mut entry = test_entry(content);
             parser.parse(&mut entry);
             assert_eq!(entry.severity, expected, "Failed for: {}", content);
         }
@@ -221,12 +218,7 @@ mod tests {
         ];
 
         for (content, expected) in cases {
-            let mut entry = LogEntry::new(
-                uuid::Uuid::new_v4(),
-                1,
-                chrono::Utc::now(),
-                content.to_string(),
-            );
+            let mut entry = test_entry(content);
             parser.parse(&mut entry);
             assert_eq!(
                 entry.service.as_deref(),
@@ -253,12 +245,7 @@ mod tests {
         ];
 
         for (content, expected) in cases {
-            let mut entry = LogEntry::new(
-                uuid::Uuid::new_v4(),
-                1,
-                chrono::Utc::now(),
-                content.to_string(),
-            );
+            let mut entry = test_entry(content);
             parser.parse(&mut entry);
             assert_eq!(
                 entry.service.as_deref(),
@@ -280,12 +267,7 @@ mod tests {
         ];
 
         for (content, expected_date) in cases {
-            let mut entry = LogEntry::new(
-                uuid::Uuid::new_v4(),
-                1,
-                chrono::Utc::now(),
-                content.to_string(),
-            );
+            let mut entry = test_entry(content);
             parser.parse(&mut entry);
             // Verify timestamp was parsed by checking the date part
             let ts_str = entry.timestamp.to_rfc3339();
@@ -309,12 +291,7 @@ mod tests {
         ];
 
         for content in cases {
-            let mut entry = LogEntry::new(
-                uuid::Uuid::new_v4(),
-                1,
-                chrono::Utc::now(),
-                content.to_string(),
-            );
+            let mut entry = test_entry(content);
             parser.parse(&mut entry);
             // Just verify parsing doesn't panic and timestamp is set
             assert!(entry.timestamp.timestamp() > 0);
@@ -332,12 +309,7 @@ mod tests {
         ];
 
         for content in cases {
-            let mut entry = LogEntry::new(
-                uuid::Uuid::new_v4(),
-                1,
-                chrono::Utc::now(),
-                content.to_string(),
-            );
+            let mut entry = test_entry(content);
             parser.parse(&mut entry);
             // Syslog format should be parsed
             assert!(entry.timestamp.timestamp() > 0);
@@ -349,12 +321,7 @@ mod tests {
         let parser = LogParser::new();
 
         let content = "2024-01-15T10:30:00Z [api-service] ERROR: Connection failed";
-        let mut entry = LogEntry::new(
-            uuid::Uuid::new_v4(),
-            1,
-            chrono::Utc::now(),
-            content.to_string(),
-        );
+        let mut entry = test_entry(content);
         parser.parse(&mut entry);
 
         assert_eq!(entry.severity, Severity::Error);
@@ -366,12 +333,7 @@ mod tests {
         let parser = LogParser::new();
 
         let content = "INFO request_id=123 user=alice action=login";
-        let mut entry = LogEntry::new(
-            uuid::Uuid::new_v4(),
-            1,
-            chrono::Utc::now(),
-            content.to_string(),
-        );
+        let mut entry = test_entry(content);
         parser.parse(&mut entry);
 
         assert_eq!(entry.severity, Severity::Info);
@@ -391,12 +353,7 @@ mod tests {
         let parser = LogParser::new();
 
         let content = "";
-        let mut entry = LogEntry::new(
-            uuid::Uuid::new_v4(),
-            1,
-            chrono::Utc::now(),
-            content.to_string(),
-        );
+        let mut entry = test_entry(content);
         parser.parse(&mut entry);
 
         // Should default to INFO and no service
@@ -410,12 +367,7 @@ mod tests {
         let parser = LogParser::new();
 
         let content = "Just a plain message with no severity";
-        let mut entry = LogEntry::new(
-            uuid::Uuid::new_v4(),
-            1,
-            chrono::Utc::now(),
-            content.to_string(),
-        );
+        let mut entry = test_entry(content);
         parser.parse(&mut entry);
 
         assert_eq!(entry.severity, Severity::Unknown);
@@ -433,12 +385,7 @@ mod tests {
         ];
 
         for (content, expected) in cases {
-            let mut entry = LogEntry::new(
-                uuid::Uuid::new_v4(),
-                1,
-                chrono::Utc::now(),
-                content.to_string(),
-            );
+            let mut entry = test_entry(content);
             parser.parse(&mut entry);
             assert_eq!(
                 entry.service.as_deref(),
@@ -460,12 +407,7 @@ mod tests {
         ];
 
         for (content, expected) in cases {
-            let mut entry = LogEntry::new(
-                uuid::Uuid::new_v4(),
-                1,
-                chrono::Utc::now(),
-                content.to_string(),
-            );
+            let mut entry = test_entry(content);
             parser.parse(&mut entry);
             assert_eq!(entry.severity, expected, "Failed for: {}", content);
         }
@@ -477,12 +419,7 @@ mod tests {
 
         // Full log line with timestamp, service, severity, and key=value pairs
         let content = "2024-01-15T10:30:00Z [order-service] ERROR: Order processing failed order_id=12345 user_id=67890";
-        let mut entry = LogEntry::new(
-            uuid::Uuid::new_v4(),
-            1,
-            chrono::Utc::now(),
-            content.to_string(),
-        );
+        let mut entry = test_entry(content);
         parser.parse(&mut entry);
 
         assert_eq!(entry.severity, Severity::Error);

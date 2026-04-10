@@ -1,6 +1,10 @@
 use crate::error::{LogPilotError, Result};
+use once_cell::sync::Lazy;
 use std::process::{Command as StdCommand, Stdio};
 use tokio::process::Command;
+
+static VALID_TARGET_RE: Lazy<regex::Regex> =
+    Lazy::new(|| regex::Regex::new(r"^[a-zA-Z0-9_\-\.:%]+$").unwrap());
 
 /// tmux command builder and executor
 pub struct TmuxCommand;
@@ -10,9 +14,8 @@ pub struct TmuxCommand;
 fn validate_target(target: &str) -> Result<()> {
     // tmux targets typically look like: "session", "session:window", "session:window.pane"
     // Allowed characters: alphanumeric, hyphen, underscore, dot, colon
-    let valid_pattern = regex::Regex::new(r"^[a-zA-Z0-9_\-\.:%]+$").unwrap();
 
-    if !valid_pattern.is_match(target) {
+    if !VALID_TARGET_RE.is_match(target) {
         return Err(LogPilotError::tmux(format!(
             "Invalid tmux target '{}': contains potentially dangerous characters",
             target
