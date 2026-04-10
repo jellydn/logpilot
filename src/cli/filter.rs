@@ -7,6 +7,7 @@ use crate::error::{LogPilotError, Result};
 use crate::models::Severity;
 use clap::Args;
 use regex::Regex;
+use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
@@ -80,6 +81,7 @@ pub async fn handle(args: FilterArgs) -> Result<()> {
     if let Some(ref pattern) = args.pattern {
         println!("   Pattern: {}", pattern);
     }
+    println!("   Hint: Use -f to follow live, -R 'pattern' for regex filter, -N 10 to limit lines");
     println!();
 
     if args.follow {
@@ -101,7 +103,7 @@ pub async fn handle(args: FilterArgs) -> Result<()> {
 }
 
 /// Parse severity level from string
-fn parse_severity(level: &str) -> Severity {
+pub fn parse_severity(level: &str) -> Severity {
     match level.to_lowercase().as_str() {
         "trace" => Severity::Trace,
         "debug" => Severity::Debug,
@@ -115,7 +117,7 @@ fn parse_severity(level: &str) -> Severity {
 }
 
 /// Check if a log line matches error criteria
-fn line_matches(
+pub fn line_matches(
     line: &str,
     min_severity: Severity,
     pattern_regex: &Option<Regex>,
@@ -145,7 +147,7 @@ fn line_matches(
 }
 
 /// Detect severity from log line content
-fn detect_severity(line: &str) -> Severity {
+pub fn detect_severity(line: &str) -> Severity {
     let line_lower = line.to_lowercase();
 
     // Check for fatal/crash indicators
@@ -266,42 +268,65 @@ async fn run_filter_stream(
     pattern_regex: Option<Regex>,
     _context: usize,
 ) -> Result<()> {
+    use std::path::PathBuf;
     use tokio::sync::mpsc;
 
     let (tx, mut rx) = mpsc::unbounded_channel::<(String, String)>();
     let pane_count = panes.len();
 
-    // Spawn capture tasks for each pane
+    // Track FIFO paths for cleanup
+    let mut fifo_paths: Vec<PathBuf> = Vec::new();
+
+    // Spawn capture tasks for each pane using FIFO approach
     for pane in panes {
         let tx = tx.clone();
         let pane_clone = pane.clone();
 
-        tokio::spawn(async move {
-            // Use pipe-pane to stream output
-            let mut child = match Command::new("tmux")
-                .args(["pipe-pane", "-t", &pane_clone, "cat"])
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-            {
-                Ok(c) => c,
-                Err(_) => return,
-            };
+        // Create FIFO for this pane
+        let fifo_path = std::env::temp_dir().join(format!(
+            "logpilot-filter-{}-{}-{}.fifo",
+            pane.replace('%', "p"),
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fifo_paths.push(fifo_path.clone());
 
-            if let Some(stdout) = child.stdout.take() {
-                let reader = BufReader::new(stdout);
+        // Create FIFO
+        tokio::process::Command::new("mkfifo")
+            .arg(&fifo_path)
+            .output()
+            .await
+            .map_err(LogPilotError::Io)?;
+
+        // Start pipe-pane to redirect output to FIFO
+        let fifo_str = fifo_path.to_string_lossy().to_string();
+        let cmd = format!("exec cat >> '{}'", fifo_str.replace('\'', "'\"'\"'"));
+        let _ = Command::new("tmux")
+            .args(["pipe-pane", "-t", &pane_clone, &cmd])
+            .output()
+            .await;
+
+        tokio::spawn(async move {
+            // Open FIFO and read lines
+            loop {
+                let file = match File::open(&fifo_path).await {
+                    Ok(f) => f,
+                    Err(_) => {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                        continue;
+                    }
+                };
+
+                let reader = BufReader::new(file);
                 let mut lines = reader.lines();
 
                 while let Ok(Some(line)) = lines.next_line().await {
                     let _ = tx.send((pane_clone.clone(), line));
                 }
-            }
 
-            // Stop piping when done
-            let _ = Command::new("tmux")
-                .args(["pipe-pane", "-t", &pane_clone])
-                .output()
-                .await;
+                // FIFO closed, retry after brief delay
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            }
         });
     }
 
@@ -311,7 +336,7 @@ async fn run_filter_stream(
     );
 
     // Process incoming lines
-    loop {
+    let result = loop {
         tokio::select! {
             Some((pane, line)) = rx.recv() => {
                 if let Some(severity) = line_matches(&line, min_severity, &pattern_regex) {
@@ -322,12 +347,21 @@ async fn run_filter_stream(
             }
             _ = tokio::signal::ctrl_c() => {
                 println!("\n\nStopping...");
-                break;
+                break Ok(());
             }
         }
+    };
+
+    // Cleanup: stop pipe-pane and remove FIFOs
+    for (pane, fifo_path) in panes.iter().zip(fifo_paths.iter()) {
+        let _ = Command::new("tmux")
+            .args(["pipe-pane", "-t", pane])
+            .output()
+            .await;
+        let _ = tokio::fs::remove_file(fifo_path).await;
     }
 
-    Ok(())
+    result
 }
 
 #[cfg(test)]
