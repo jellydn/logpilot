@@ -316,13 +316,22 @@ impl LogPilotMcpServer {
 
 impl ServerHandler for LogPilotMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
-            ServerCapabilities::builder()
+        ServerInfo {
+            protocol_version: rmcp::model::ProtocolVersion::V_2024_11_05,
+            capabilities: ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
                 .build(),
-        )
-        .with_server_info(Implementation::new("logpilot", env!("CARGO_PKG_VERSION")))
+            server_info: Implementation {
+                name: "logpilot".to_string(),
+                title: None,
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                description: None,
+                icons: None,
+                website_url: None,
+            },
+            instructions: None,
+        }
     }
 
     fn list_resources(
@@ -331,7 +340,7 @@ impl ServerHandler for LogPilotMcpServer {
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> impl std::future::Future<
         Output = Result<rmcp::model::ListResourcesResult, rmcp::model::ErrorData>,
-    > + rmcp::service::MaybeSendFuture
+    > + Send
            + '_ {
         async move {
             use rmcp::model::{ListResourcesResult, RawResource, Resource};
@@ -414,7 +423,7 @@ impl ServerHandler for LogPilotMcpServer {
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> impl std::future::Future<
         Output = Result<rmcp::model::ListToolsResult, rmcp::model::ErrorData>,
-    > + rmcp::service::MaybeSendFuture
+    > + Send
            + '_ {
         async move {
             use rmcp::model::{ListToolsResult, Tool};
@@ -474,10 +483,10 @@ impl ServerHandler for LogPilotMcpServer {
         request: rmcp::model::CallToolRequestParams,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> impl std::future::Future<Output = Result<rmcp::model::CallToolResult, rmcp::model::ErrorData>>
-           + rmcp::service::MaybeSendFuture
+           + Send
            + '_ {
         async move {
-            use rmcp::model::ErrorData;
+            use rmcp::model::ErrorData as McpError;
 
             let name = request.name.as_ref();
 
@@ -488,7 +497,7 @@ impl ServerHandler for LogPilotMcpServer {
                     .and_then(|a| a.get("session"))
                     .and_then(|s| s.as_str())
                     .ok_or_else(|| {
-                        ErrorData::invalid_params("Missing required parameter: session", None)
+                        McpError::invalid_params("Missing required parameter: session", None)
                     })?;
 
                 let pattern = request
@@ -497,7 +506,7 @@ impl ServerHandler for LogPilotMcpServer {
                     .and_then(|a| a.get("pattern"))
                     .and_then(|p| p.as_str())
                     .ok_or_else(|| {
-                        ErrorData::invalid_params("Missing required parameter: pattern", None)
+                        McpError::invalid_params("Missing required parameter: pattern", None)
                     })?;
 
                 let severity = request
@@ -521,7 +530,7 @@ impl ServerHandler for LogPilotMcpServer {
                     .and_then(|a| a.get("session"))
                     .and_then(|s| s.as_str())
                     .ok_or_else(|| {
-                        ErrorData::invalid_params("Missing required parameter: session", None)
+                        McpError::invalid_params("Missing required parameter: session", None)
                     })?;
 
                 // Use the tool router instead
@@ -531,7 +540,7 @@ impl ServerHandler for LogPilotMcpServer {
                 self.stats(rmcp::handler::server::wrapper::Parameters(stats_params))
                     .await
             } else {
-                Err(ErrorData::method_not_found::<
+                Err(McpError::method_not_found::<
                     rmcp::model::CallToolRequestMethod,
                 >())
             }

@@ -44,7 +44,7 @@ pub async fn handle(args: AskArgs) -> anyhow::Result<()> {
     // Build the prompt
     let mut prompt = String::new();
 
-    prompt.push_str(&format!("# Debug session: `{}`\n\n", args.session));
+    prompt.push_str(&format!("# Debug tmux session: `{}`\n\n", args.session));
     prompt.push_str(&format!(
         "**Time window:** {} → {} UTC  \n",
         window_start.format("%Y-%m-%d %H:%M:%S"),
