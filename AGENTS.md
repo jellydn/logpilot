@@ -1,41 +1,51 @@
-# LogPilot Development Guidelines
+# AGENTS.md - LogPilot Development
 
-CLI tool: `cargo run -- --help`
-
-## Commands
+## Quick Commands
 
 ```bash
-cargo test && cargo clippy    # Local verification (order matters: test first)
-cargo fmt -- --check          # Format check
+# Development
+just test          # cargo test && cargo clippy
+just ci           # fmt + test (parallel)
+just lint         # cargo clippy --all-features -- -D warnings
+just fmt          # cargo fmt -- --check
+
+# Run
+cargo run -- watch <session>   # Start a watch session
+cargo run -- mcp-server     # Start MCP server
+cargo run -- status         # Show monitored sessions
 ```
 
-CI runs: fmt, test, clippy (parallel jobs). All must pass.
+## Key Facts
 
-## Project
+- **Rust**: Min 1.86 (from `.github/workflows/ci.yml`)
+- **MCP**: Uses `rmcp` crate (the official Rust MCP SDK), not legacy custom impl
+- **Pre-commit**: Runs `cargo fmt`, `cargo test`, `cargo clippy` (install via `pre-commit install`)
+- **CLI subcommands**: `watch`, `filter`, `summarize`, `ask`, `mcp-server`, `status` (see `src/main.rs`)
 
-- **Binary**: `logpilot` (src/main.rs)
-- **Lib**: `logpilot` crate (src/lib.rs)
-- **Features**: tmux session capture, log parsing, MCP server mode
+## Testing Quirk
 
-## Architecture
-
-- `src/cli/` - CLI subcommands (watch, summarize, ask, mcp-server, status)
-- `src/capture/` - tmux interaction (session.rs, pane.rs, tmux.rs)
-- `src/analyzer/` - alert and incident detection (alerts.rs, incidents.rs, patterns.rs)
-- `src/models/` - data models (log_entry, incident, alert, pattern, severity, etc.)
-- `src/mcp/` - MCP server protocol (server.rs, protocol.rs)
-- `src/pipeline/` - log parsing and deduplication
-
-MCP server starts but needs full implementation for live data integration.
-
-## Setup
-
-- Config: `~/.config/logpilot/config.toml` (see `config.example.toml`)
-- Requires: tmux installed, Rust 1.86+ (matches CI toolchain)
-
-## Testing
+MCP protocol tests (`tests/test_mcp_protocol.rs`) require pre-built release binary:
 
 ```bash
-cargo test --all-features        # Run all tests
-cargo test --all-features -- --nocapture  # Debug output
+cargo build --release
+# Then run tests
+cargo test --test test_mcp_protocol
 ```
+
+## Architecture Overview
+
+- `src/analyzer` - Anomaly detection, pattern analysis
+- `src/buffer` - Ring buffer + SQLite persistence
+- `src/capture` - tmux integration
+- `src/cli` - CLI command handlers
+- `src/mcp` - MCP server (rmcp-based)
+- `src/models` - Data structures
+- `src/pipeline` - Log processing (parse, dedup, cluster)
+
+## MCP Testing
+
+See `docs/MCP_TESTING.md` for manual JSON-RPC testing over stdio.
+
+## Configuration
+
+Config file: `~/.config/logpilot/config.toml` (see `config.example.toml`)
