@@ -247,9 +247,12 @@ impl McpServer {
                     .and_then(|s| s.as_str())
                     .unwrap_or("");
 
-                let stats = match self.get_session_stats(session).await {
-                    Ok(s) => s,
-                    Err(e) => format!("Error getting stats for '{}': {}", session, e),
+                let (stats, is_error) = match self.get_session_stats(session).await {
+                    Ok(s) => (s, false),
+                    Err(e) => (
+                        format!("Error getting stats for '{}': {}", session, e),
+                        true,
+                    ),
                 };
 
                 ToolsCallResult {
@@ -257,11 +260,14 @@ impl McpServer {
                         content_type: "text".to_string(),
                         text: stats,
                     }],
-                    is_error: None,
+                    is_error: Some(is_error),
                 }
             }
             _ => {
-                return JsonRpcResponse::error(id, JsonRpcError::method_not_found(&params.name));
+                return JsonRpcResponse::error(
+                    id,
+                    JsonRpcError::invalid_params(format!("Unknown tool: {}", params.name)),
+                );
             }
         };
 
