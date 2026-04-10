@@ -406,13 +406,14 @@ fn test_mcp_tools_list() {
     );
     assert!(result["tools"].is_array(), "Tools must be an array");
 
-    // Note: The rmcp-based server currently returns empty tools array
-    // as tools are handled via the tool router, not exposed through resources
+    // The rmcp-based server now returns tools via list_tools
     let tools = result["tools"].as_array().unwrap();
-    assert!(
-        tools.is_empty(),
-        "Tools array should be empty in rmcp-based server"
-    );
+    assert!(!tools.is_empty(), "Tools array should not be empty");
+
+    // Verify we have search and stats tools
+    let tool_names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+    assert!(tool_names.contains(&"search"), "Should have 'search' tool");
+    assert!(tool_names.contains(&"stats"), "Should have 'stats' tool");
 
     let _ = child.kill();
 }

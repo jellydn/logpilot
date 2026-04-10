@@ -324,6 +324,219 @@ impl ServerHandler for LogPilotMcpServer {
         )
         .with_server_info(Implementation::new("logpilot", env!("CARGO_PKG_VERSION")))
     }
+
+    fn list_resources(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> impl std::future::Future<
+        Output = Result<rmcp::model::ListResourcesResult, rmcp::model::ErrorData>,
+    > + rmcp::service::MaybeSendFuture
+           + '_ {
+        async move {
+            use rmcp::model::{ListResourcesResult, RawResource, Resource};
+
+            let resources = vec![
+                Resource::new(
+                    RawResource {
+                        uri: "logpilot://session/{name}/summary".to_string(),
+                        name: "Session Summary".to_string(),
+                        title: None,
+                        description: Some("Current incident summary for the session".to_string()),
+                        mime_type: Some("application/json".to_string()),
+                        size: None,
+                        icons: None,
+                        meta: None,
+                    },
+                    None,
+                ),
+                Resource::new(
+                    RawResource {
+                        uri: "logpilot://session/{name}/entries".to_string(),
+                        name: "Log Entries".to_string(),
+                        title: None,
+                        description: Some("Log entries within a time range".to_string()),
+                        mime_type: Some("application/json".to_string()),
+                        size: None,
+                        icons: None,
+                        meta: None,
+                    },
+                    None,
+                ),
+                Resource::new(
+                    RawResource {
+                        uri: "logpilot://session/{name}/patterns".to_string(),
+                        name: "Detected Patterns".to_string(),
+                        title: None,
+                        description: Some("Detected error patterns for the session".to_string()),
+                        mime_type: Some("application/json".to_string()),
+                        size: None,
+                        icons: None,
+                        meta: None,
+                    },
+                    None,
+                ),
+                Resource::new(
+                    RawResource {
+                        uri: "logpilot://session/{name}/incidents".to_string(),
+                        name: "Active Incidents".to_string(),
+                        title: None,
+                        description: Some("Currently active incidents".to_string()),
+                        mime_type: Some("application/json".to_string()),
+                        size: None,
+                        icons: None,
+                        meta: None,
+                    },
+                    None,
+                ),
+                Resource::new(
+                    RawResource {
+                        uri: "logpilot://session/{name}/alerts".to_string(),
+                        name: "Active Alerts".to_string(),
+                        title: None,
+                        description: Some("Currently firing alerts".to_string()),
+                        mime_type: Some("application/json".to_string()),
+                        size: None,
+                        icons: None,
+                        meta: None,
+                    },
+                    None,
+                ),
+            ];
+
+            Ok(ListResourcesResult::with_all_items(resources))
+        }
+    }
+
+    fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> impl std::future::Future<
+        Output = Result<rmcp::model::ListToolsResult, rmcp::model::ErrorData>,
+    > + rmcp::service::MaybeSendFuture
+           + '_ {
+        async move {
+            use rmcp::model::{ListToolsResult, Tool};
+            use std::sync::Arc;
+
+            let search_schema: Arc<rmcp::model::JsonObject> = Arc::new(
+                serde_json::from_value(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "session": {
+                            "type": "string",
+                            "description": "Session name to search"
+                        },
+                        "pattern": {
+                            "type": "string",
+                            "description": "Text pattern to search for"
+                        },
+                        "severity": {
+                            "type": "string",
+                            "description": "Optional severity filter (ERROR, WARN, etc.)"
+                        }
+                    },
+                    "required": ["session", "pattern"]
+                }))
+                .unwrap(),
+            );
+
+            let stats_schema: Arc<rmcp::model::JsonObject> = Arc::new(
+                serde_json::from_value(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "session": {
+                            "type": "string",
+                            "description": "Session name"
+                        }
+                    },
+                    "required": ["session"]
+                }))
+                .unwrap(),
+            );
+
+            let tools = vec![
+                Tool::new(
+                    "search",
+                    "Search log entries by text pattern",
+                    search_schema,
+                ),
+                Tool::new("stats", "Get session statistics", stats_schema),
+            ];
+
+            Ok(ListToolsResult::with_all_items(tools))
+        }
+    }
+
+    fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> impl std::future::Future<Output = Result<rmcp::model::CallToolResult, rmcp::model::ErrorData>>
+           + rmcp::service::MaybeSendFuture
+           + '_ {
+        async move {
+            use rmcp::model::ErrorData;
+
+            let name = request.name.as_ref();
+
+            if name == "search" {
+                let session = request
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("session"))
+                    .and_then(|s| s.as_str())
+                    .ok_or_else(|| {
+                        ErrorData::invalid_params("Missing required parameter: session", None)
+                    })?;
+
+                let pattern = request
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("pattern"))
+                    .and_then(|p| p.as_str())
+                    .ok_or_else(|| {
+                        ErrorData::invalid_params("Missing required parameter: pattern", None)
+                    })?;
+
+                let severity = request
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("severity"))
+                    .and_then(|s| s.as_str());
+
+                // Use the tool router instead
+                let search_params = SearchParams {
+                    session: session.to_string(),
+                    pattern: pattern.to_string(),
+                    severity: severity.map(|s| s.to_string()),
+                };
+                self.search(rmcp::handler::server::wrapper::Parameters(search_params))
+                    .await
+            } else if name == "stats" {
+                let session = request
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("session"))
+                    .and_then(|s| s.as_str())
+                    .ok_or_else(|| {
+                        ErrorData::invalid_params("Missing required parameter: session", None)
+                    })?;
+
+                // Use the tool router instead
+                let stats_params = StatsParams {
+                    session: session.to_string(),
+                };
+                self.stats(rmcp::handler::server::wrapper::Parameters(stats_params))
+                    .await
+            } else {
+                Err(ErrorData::method_not_found::<
+                    rmcp::model::CallToolRequestMethod,
+                >())
+            }
+        }
+    }
 }
 
 impl Default for LogPilotMcpServer {
