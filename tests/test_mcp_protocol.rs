@@ -6,7 +6,6 @@ use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 
-
 /// Test: MCP server responds to initialize request
 #[test]
 fn test_mcp_initialize() {

@@ -177,9 +177,48 @@ impl ResourceHandler {
         }
     }
 
-    /// Build entries resource content
-    pub fn build_entries(session_name: &str, entries: &[LogEntry]) -> ResourceContent {
-        let entries_json: Vec<serde_json::Value> = entries
+    /// Build entries resource content with optional filtering
+    pub fn build_entries(
+        session_name: &str,
+        entries: &[LogEntry],
+        query_params: &HashMap<String, String>,
+    ) -> ResourceContent {
+        // Parse filter parameters
+        let severity_filter = query_params.get("severity").map(|s| s.to_uppercase());
+        let service_filter = query_params.get("service").cloned();
+        let limit = query_params
+            .get("limit")
+            .and_then(|l| l.parse::<usize>().ok())
+            .unwrap_or(100);
+        let offset = query_params
+            .get("offset")
+            .and_then(|o| o.parse::<usize>().ok())
+            .unwrap_or(0);
+
+        // Filter entries
+        let filtered: Vec<&LogEntry> = entries
+            .iter()
+            .filter(|e| {
+                // Severity filter
+                if let Some(ref sev) = severity_filter {
+                    let entry_sev = format!("{:?}", e.severity).to_uppercase();
+                    if !entry_sev.contains(sev) && entry_sev != *sev {
+                        return false;
+                    }
+                }
+                // Service filter
+                if let Some(ref svc) = service_filter {
+                    if e.service.as_ref() != Some(svc) {
+                        return false;
+                    }
+                }
+                true
+            })
+            .skip(offset)
+            .take(limit)
+            .collect();
+
+        let entries_json: Vec<serde_json::Value> = filtered
             .iter()
             .map(|e| {
                 json!({
@@ -194,10 +233,24 @@ impl ResourceHandler {
             })
             .collect();
 
+        let result = json!({
+            "entries": entries_json,
+            "pagination": {
+                "total": entries.len(),
+                "returned": entries_json.len(),
+                "limit": limit,
+                "offset": offset,
+            },
+            "filters": {
+                "severity": severity_filter,
+                "service": service_filter,
+            }
+        });
+
         ResourceContent {
             uri: format!("logpilot://session/{}/entries", session_name),
             mime_type: Some("application/json".to_string()),
-            text: serde_json::to_string(&entries_json).unwrap_or_default(),
+            text: result.to_string(),
         }
     }
 

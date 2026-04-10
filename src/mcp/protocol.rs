@@ -163,6 +163,48 @@ pub struct ResourcesReadResult {
     pub contents: Vec<ResourceContent>,
 }
 
+/// MCP Tool definition
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Tool {
+    pub name: String,
+    pub description: String,
+    pub input_schema: Value,
+}
+
+/// Tools/list result
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolsListResult {
+    pub tools: Vec<Tool>,
+}
+
+/// Tools/call params
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolsCallParams {
+    pub name: String,
+    pub arguments: Option<Value>,
+}
+
+/// Tools/call result
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolsCallResult {
+    pub content: Vec<ToolContent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_error: Option<bool>,
+}
+
+/// Tool response content
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolContent {
+    #[serde(rename = "type")]
+    pub content_type: String,
+    pub text: String,
+}
+
 impl JsonRpcRequest {
     pub fn new(method: impl Into<String>, params: Option<Value>) -> Self {
         Self {
