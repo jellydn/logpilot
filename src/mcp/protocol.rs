@@ -21,6 +21,9 @@ pub struct JsonRpcRequest {
 #[serde(rename_all = "camelCase")]
 pub struct JsonRpcResponse {
     pub jsonrpc: String,
+    // Note: id should be omitted entirely if None, not sent as null
+    // The MCP SDK schema only accepts string or number for id, not null
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
