@@ -34,6 +34,29 @@ enum Commands {
         #[arg(short, long, default_value = "30")]
         buffer: u32,
     },
+    /// Filter error lines from a tmux session
+    Filter {
+        /// Name of the tmux session to filter
+        session: String,
+        /// Specific pane to filter (default: all panes)
+        #[arg(short = 'P', long)]
+        pane: Option<String>,
+        /// Minimum severity level (trace, debug, info, warn, error, fatal)
+        #[arg(short = 'L', long, default_value = "error")]
+        level: String,
+        /// Follow output continuously
+        #[arg(short, long)]
+        follow: bool,
+        /// Additional pattern to filter (regex)
+        #[arg(short = 'R', long)]
+        pattern: Option<String>,
+        /// Lines of context around matches
+        #[arg(short = 'C', long, default_value = "0")]
+        context: usize,
+        /// Maximum number of lines to output
+        #[arg(short = 'N', long)]
+        limit: Option<usize>,
+    },
     /// Summarize recent log activity
     Summarize {
         /// Time window to summarize (e.g., "10m", "1h")
@@ -79,6 +102,28 @@ async fn main() -> Result<()> {
                 buffer_minutes: buffer,
             };
             cli::watch::run(options).await?;
+        }
+        Commands::Filter {
+            session,
+            pane,
+            level,
+            follow,
+            pattern,
+            context,
+            limit,
+        } => {
+            let args = cli::filter::FilterArgs {
+                session,
+                pane,
+                level,
+                follow,
+                pattern,
+                context,
+                limit,
+            };
+            if let Err(e) = cli::filter::handle(args).await {
+                eprintln!("Error: {}", e);
+            }
         }
         Commands::Summarize { last } => {
             info!("Generating summary for last {}", last);
