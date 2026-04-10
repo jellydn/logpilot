@@ -103,7 +103,7 @@ impl McpServer {
         _params: Option<serde_json::Value>,
     ) -> JsonRpcResponse {
         let result = InitializeResult {
-            protocol_version: "2024-11-05".to_string(),
+            protocol_version: "2025-06-18".to_string(),
             capabilities: self.capabilities.clone(),
             server_info: ServerInfo {
                 name: "logpilot".to_string(),
@@ -204,39 +204,52 @@ impl McpServer {
 
         let result = match params.name.as_str() {
             "search" => {
+                // Validate required arguments
                 let session = params
                     .arguments
                     .as_ref()
                     .and_then(|a| a.get("session"))
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("");
+                    .and_then(|s| s.as_str());
                 let pattern = params
                     .arguments
                     .as_ref()
                     .and_then(|a| a.get("pattern"))
-                    .and_then(|p| p.as_str())
-                    .unwrap_or("");
+                    .and_then(|p| p.as_str());
+
+                // Return invalid_params error if required args are missing
+                let (session, pattern) = match (session, pattern) {
+                    (Some(s), Some(p)) if !s.is_empty() && !p.is_empty() => (s, p),
+                    _ => {
+                        return JsonRpcResponse::error(
+                            id,
+                            JsonRpcError::invalid_params(
+                                "Missing required arguments: 'session' and 'pattern' are required and must be non-empty"
+                            ),
+                        );
+                    }
+                };
+
                 let severity = params
                     .arguments
                     .as_ref()
                     .and_then(|a| a.get("severity"))
                     .and_then(|s| s.as_str());
 
-                // Get search results
-                let results = match self.search_session(session, pattern, severity).await {
-                    Ok(r) => r,
-                    Err(e) => format!("Error searching '{}': {}", session, e),
+                // Get search results with proper error handling
+                let (text, is_error) = match self.search_session(session, pattern, severity).await {
+                    Ok(r) => (
+                        format!("Search results for '{}' in {}:\n{}", pattern, session, r),
+                        None,
+                    ),
+                    Err(e) => (format!("Error searching '{}': {}", session, e), Some(true)),
                 };
 
                 ToolsCallResult {
                     content: vec![ToolContent {
                         content_type: "text".to_string(),
-                        text: format!(
-                            "Search results for '{}' in {}:\n{}",
-                            pattern, session, results
-                        ),
+                        text,
                     }],
-                    is_error: None,
+                    is_error,
                 }
             }
             "stats" => {
@@ -266,7 +279,7 @@ impl McpServer {
             _ => {
                 return JsonRpcResponse::error(
                     id,
-                    JsonRpcError::invalid_params(format!("Unknown tool: {}", params.name)),
+                    JsonRpcError::method_not_found(&format!("tools/call: {}", params.name)),
                 );
             }
         };
@@ -674,7 +687,10 @@ impl McpServer {
         }
 
         if matches.is_empty() {
-            return Ok("No matches found (Source: snapshot capture)\nNote: Run 'logpilot watch {}' for live monitoring".to_string());
+            return Ok(format!(
+                "No matches found (Source: snapshot capture)\nNote: Run 'logpilot watch {}' for live monitoring",
+                session_name
+            ));
         }
 
         Ok(format!(

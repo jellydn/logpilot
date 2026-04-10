@@ -90,12 +90,9 @@ impl ResourceHandler {
 
     fn parse_query(query: &str) -> HashMap<String, String> {
         let mut params = HashMap::new();
-        for part in query.split('&') {
-            if let Some(eq) = part.find('=') {
-                let key = part[..eq].to_string();
-                let value = part[eq + 1..].to_string();
-                params.insert(key, value);
-            }
+        // Use url::form_urlencoded::parse for proper percent-decoding
+        for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+            params.insert(key.into_owned(), value.into_owned());
         }
         params
     }
@@ -224,10 +221,11 @@ impl ResourceHandler {
                         return false;
                     }
                 }
-                // Severity filter
+                // Severity filter (exact match, case-insensitive)
                 if let Some(ref sev) = severity_filter {
                     let entry_sev = format!("{:?}", e.severity).to_uppercase();
-                    if !entry_sev.contains(sev) {
+                    let normalized_sev = sev.to_uppercase();
+                    if entry_sev != normalized_sev {
                         return false;
                     }
                 }
@@ -274,9 +272,11 @@ impl ResourceHandler {
                         return false;
                     }
                 }
+                // Severity filter (exact match, case-insensitive)
                 if let Some(ref sev) = severity_filter {
                     let entry_sev = format!("{:?}", e.severity).to_uppercase();
-                    if !entry_sev.contains(sev) {
+                    let normalized_sev = sev.to_uppercase();
+                    if entry_sev != normalized_sev {
                         return false;
                     }
                 }

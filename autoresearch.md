@@ -50,13 +50,16 @@ Enhance LogPilot's MCP server with additional resources and tools for better AI 
 ### Current State
 - 5 basic resources implemented (summary, entries, patterns, incidents, alerts)
 - 2 MCP tools implemented: `search` and `stats`
-- Query parameter parsing with filtering support:
-  - `severity` filter for entries resource
+- Query parameter parsing with percent-decoding support (e.g., `service=api%20gateway`)
+- Filtering support for entries resource:
+  - `severity` filter with exact matching (case-insensitive)
   - `service` filter for entries resource
-  - `since` and `until` time range filters for entries resource
+  - `since` and `until` time range filters (RFC3339 format)
 - Pagination support with `limit` (max 1000) and `offset` parameters
-- Pagination metadata shows filtered total count
+- Pagination metadata shows filtered total count (correct after filtering)
 - Tests for tools/list and tools/call methods
+- Server capabilities now advertise both resources and tools support
+- Required argument validation for search tool (returns invalid_params error)
 
 ### Completed
 1. ✅ Added `severity` query param to entries resource

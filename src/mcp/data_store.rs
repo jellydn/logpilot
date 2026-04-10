@@ -102,7 +102,8 @@ impl SessionDataStore {
         let now = Utc::now();
         let stale_threshold = now - chrono::Duration::minutes(SESSION_STALE_MINUTES);
 
-        let stale_sessions: Vec<String> = self
+        // First pass: identify potentially stale sessions
+        let potentially_stale: Vec<String> = self
             .sessions
             .iter()
             .filter(|entry| {
@@ -115,9 +116,24 @@ impl SessionDataStore {
             .map(|entry| entry.key().clone())
             .collect();
 
-        for session_name in stale_sessions {
-            tracing::info!("Removing stale session: {}", session_name);
-            self.sessions.remove(&session_name);
+        // Second pass: re-check under write lock before removal to avoid TOCTOU race
+        for session_name in potentially_stale {
+            if let Some(entry) = self.sessions.get(&session_name) {
+                // Re-check staleness with proper locking
+                let should_remove = match entry.try_write() {
+                    Ok(data) => data.last_updated < stale_threshold,
+                    Err(_) => {
+                        // If we can't get write lock, session is active - skip
+                        false
+                    }
+                };
+
+                if should_remove {
+                    tracing::info!("Removing stale session: {}", session_name);
+                    drop(entry); // Release the ref before removing
+                    self.sessions.remove(&session_name);
+                }
+            }
         }
     }
 

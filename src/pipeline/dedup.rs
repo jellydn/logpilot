@@ -2,7 +2,7 @@
 
 use crate::models::LogEntry;
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 // Static compiled regex patterns for performance
 static TIMESTAMP_RE: Lazy<regex::Regex> = Lazy::new(|| {
@@ -30,10 +30,8 @@ pub struct Deduplicator {
     signatures: HashMap<String, u64>,
     /// Threshold for considering two entries similar (Hamming distance)
     similarity_threshold: u32,
-    /// Counter for FIFO eviction
-    insert_count: u64,
-    /// Track insertion order for eviction (signature -> insert order)
-    insertion_order: HashMap<String, u64>,
+    /// FIFO queue for eviction (oldest entries at front)
+    insertion_queue: VecDeque<String>,
 }
 
 impl Deduplicator {
@@ -41,29 +39,21 @@ impl Deduplicator {
         Self {
             signatures: HashMap::with_capacity(MAX_DEDUP_SIGNATURES),
             similarity_threshold: 3, // Allow up to 3 bits difference
-            insert_count: 0,
-            insertion_order: HashMap::with_capacity(MAX_DEDUP_SIGNATURES),
+            insertion_queue: VecDeque::with_capacity(MAX_DEDUP_SIGNATURES),
         }
     }
 
-    /// Evict oldest entries when size limit reached
+    /// Evict oldest entries when size limit reached (proper FIFO)
     fn evict_if_needed(&mut self) {
         if self.signatures.len() >= MAX_DEDUP_SIGNATURES {
-            // Find and remove oldest 20% of entries
+            // Remove oldest 20% of entries from front of FIFO queue
             let to_remove = (MAX_DEDUP_SIGNATURES / 5).max(1);
-            let threshold = self.insert_count - to_remove as u64;
 
-            let old_keys: Vec<String> = self
-                .insertion_order
-                .iter()
-                .filter(|(_, &order)| order < threshold)
-                .take(to_remove)
-                .map(|(k, _)| k.clone())
-                .collect();
-
-            for key in old_keys {
-                self.signatures.remove(&key);
-                self.insertion_order.remove(&key);
+            for _ in 0..to_remove {
+                if let Some(key) = self.insertion_queue.pop_front() {
+                    // Only remove from signatures if key matches (handles duplicates in queue)
+                    self.signatures.remove(&key);
+                }
             }
         }
     }
@@ -162,9 +152,7 @@ impl Deduplicator {
         let normalized = Self::normalize_content(&entry.raw_content);
         let hash = Self::compute_simhash(&normalized);
         self.signatures.insert(signature.clone(), hash);
-        self.insertion_order
-            .insert(signature.clone(), self.insert_count);
-        self.insert_count += 1;
+        self.insertion_queue.push_back(signature);
     }
 
     /// Get the number of unique signatures stored
