@@ -241,13 +241,10 @@ pub async fn run(options: WatchOptions) -> Result<()> {
 /// Print status header with session info
 fn print_status_header(session: &str, buffer_minutes: u32) {
     println!();
-    println!("{}", "━".repeat(60));
-    println!("🚀 LogPilot: Watching session '{}'", session);
     println!(
-        "   Buffer: {}min | Press 'a' to ack alerts | 's' for summary | '?' for help | 'q' to quit",
-        buffer_minutes
+        "🚀 watching '{}' [{}min] | a:ack s:sum ?:help q:quit",
+        session, buffer_minutes
     );
-    println!("{}", "━".repeat(60));
     println!();
 }
 

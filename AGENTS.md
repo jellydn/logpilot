@@ -31,7 +31,7 @@ MCP server starts but needs full implementation for live data integration.
 ## Setup
 
 - Config: `~/.config/logpilot/config.toml` (see `config.example.toml`)
-- Requires: tmux installed, Rust 1.75+
+- Requires: tmux installed, Rust 1.86+ (matches CI toolchain)
 
 ## Testing
 

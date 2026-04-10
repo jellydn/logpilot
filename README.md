@@ -50,6 +50,12 @@ LogPilot captures live tmux pane output, performs real-time log analysis (anomal
 cargo install logpilot
 ```
 
+Or install directly from GitHub:
+
+```sh
+cargo install --git https://github.com/jellydn/logpilot --locked
+```
+
 Or build from source:
 
 ```sh
