@@ -27,7 +27,7 @@ serde_json = "1.0"
 clap = { version = "4.4", features = ["derive"] }
 
 # Terminal UI
-crossterm = "0.27"
+crossterm = "0.29"
 
 # Pattern matching
 regex = "1.10"
