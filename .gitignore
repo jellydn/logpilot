@@ -38,3 +38,4 @@ Thumbs.db
 /tmp/
 *.tmp
 .cargo_cache
+/.claude/settings.local.json
