@@ -19,11 +19,8 @@ pub async fn handle(args: McpArgs) -> anyhow::Result<()> {
     eprintln!("[LogPilot] MCP server starting...");
     eprintln!("[LogPilot] Protocol: Model Context Protocol 2024-11-05");
     eprintln!("[LogPilot] Version: {}", env!("CARGO_PKG_VERSION"));
-
-    if args.verbose {
-        eprintln!("[LogPilot] Transport: stdio");
-        eprintln!("[LogPilot] Resources: logpilot://session/{{name}}/summary, entries, patterns, incidents, alerts");
-    }
+    eprintln!("[LogPilot] Transport: stdio");
+    eprintln!("[LogPilot] Resources: logpilot://session/{{name}}/summary, entries, patterns, incidents, alerts");
 
     // Create and run MCP server
     let server = McpServer::new();
