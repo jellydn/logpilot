@@ -243,4 +243,163 @@ mod tests {
         let json = serde_json::to_string(&resource).unwrap();
         assert!(json.contains("logpilot://session/test/summary"));
     }
+
+    // Additional MCP Protocol Compliance Tests
+
+    #[test]
+    fn test_jsonrpc_request_with_null_id() {
+        // Server may send notifications with null id
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            method: "ping".to_string(),
+            params: None,
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("\"jsonrpc\":\"2.0\""));
+        assert!(json.contains("\"method\":\"ping\""));
+    }
+
+    #[test]
+    fn test_jsonrpc_request_with_string_id() {
+        // Some clients use string IDs
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(Value::from("req-123")),
+            method: "resources/list".to_string(),
+            params: None,
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("\"id\":\"req-123\""));
+    }
+
+    #[test]
+    fn test_jsonrpc_request_with_numeric_id() {
+        // Standard numeric ID
+        let request = JsonRpcRequest::new_with_id(42, "resources/read", None);
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("\"id\":42"));
+    }
+
+    #[test]
+    fn test_jsonrpc_request_deserialization() {
+        let json = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}"#;
+        let request: JsonRpcRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(request.jsonrpc, "2.0");
+        assert_eq!(request.method, "initialize");
+        assert!(request.params.is_some());
+    }
+
+    #[test]
+    fn test_jsonrpc_response_deserialization() {
+        let json =
+            r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05"},"error":null}"#;
+        let response: JsonRpcResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.jsonrpc, "2.0");
+        assert!(response.result.is_some());
+        assert!(response.error.is_none());
+    }
+
+    #[test]
+    fn test_jsonrpc_response_with_error() {
+        let json = r#"{"jsonrpc":"2.0","id":1,"result":null,"error":{"code":-32601,"message":"Method not found","data":null}}"#;
+        let response: JsonRpcResponse = serde_json::from_str(json).unwrap();
+        assert!(response.result.is_none());
+        assert!(response.error.is_some());
+        let err = response.error.unwrap();
+        assert_eq!(err.code, -32601);
+    }
+
+    #[test]
+    fn test_jsonrpc_error_codes() {
+        // Standard JSON-RPC 2.0 error codes
+        let invalid_request = JsonRpcError::invalid_request("Missing jsonrpc field");
+        assert_eq!(invalid_request.code, -32600);
+
+        let invalid_params = JsonRpcError::invalid_params("Expected string");
+        assert_eq!(invalid_params.code, -32602);
+
+        let internal_error = JsonRpcError::internal_error("Database connection failed");
+        assert_eq!(internal_error.code, -32603);
+    }
+
+    #[test]
+    fn test_jsonrpc_response_null_result() {
+        // Response with null result (valid case for some methods)
+        let response = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: Some(Value::from(1)),
+            result: Some(Value::Null),
+            error: None,
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"result\":null"));
+    }
+
+    #[test]
+    fn test_resource_optional_fields() {
+        // Resource with minimal fields (no description, no mime_type)
+        let resource = Resource {
+            uri: "logpilot://session/test/entries".to_string(),
+            name: "Entries".to_string(),
+            description: None,
+            mime_type: None,
+        };
+        let json = serde_json::to_string(&resource).unwrap();
+        assert!(!json.contains("description")); // Should be skipped
+        assert!(!json.contains("mimeType")); // Should be skipped
+    }
+
+    #[test]
+    fn test_initialize_result_serialization() {
+        let result = InitializeResult {
+            protocol_version: "2024-11-05".to_string(),
+            capabilities: ServerCapabilities {
+                resources: ResourceCapabilities {
+                    supported_uris: vec!["logpilot://session/{name}/summary".to_string()],
+                },
+            },
+            server_info: ServerInfo {
+                name: "logpilot".to_string(),
+                version: "0.1.0".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("protocolVersion"));
+        assert!(json.contains("2024-11-05"));
+        assert!(json.contains("serverInfo"));
+        assert!(json.contains("logpilot"));
+    }
+
+    #[test]
+    fn test_resource_content_serialization() {
+        let content = ResourceContent {
+            uri: "logpilot://session/test/summary".to_string(),
+            mime_type: Some("application/json".to_string()),
+            text: r#"{"total_entries":100}"#.to_string(),
+        };
+        let json = serde_json::to_string(&content).unwrap();
+        assert!(json.contains("\"text\":\"{\\\"total_entries\\\":100}\""));
+    }
+
+    #[test]
+    fn test_resources_read_params_deserialization() {
+        let json = r#"{"uri":"logpilot://session/test/summary"}"#;
+        let params: ResourcesReadParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.uri, "logpilot://session/test/summary");
+    }
+
+    #[test]
+    fn test_resources_list_result_serialization() {
+        let result = ResourcesListResult {
+            resources: vec![Resource {
+                uri: "logpilot://session/test/summary".to_string(),
+                name: "Summary".to_string(),
+                description: None,
+                mime_type: None,
+            }],
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("resources"));
+    }
 }

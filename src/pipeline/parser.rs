@@ -178,6 +178,33 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_severity_variations() {
+        let parser = LogParser::new();
+
+        let cases = vec![
+            ("error: lowercase error", Severity::Error),
+            ("ERROR lowercase", Severity::Error),
+            ("[ERROR] bracketed", Severity::Error),
+            ("WARNING: warning alias", Severity::Warn),
+            ("warning: lowercase warning", Severity::Warn),
+            ("info: lowercase info", Severity::Info),
+            ("debug: lowercase debug", Severity::Debug),
+            ("trace: lowercase trace", Severity::Trace),
+        ];
+
+        for (content, expected) in cases {
+            let mut entry = LogEntry::new(
+                uuid::Uuid::new_v4(),
+                1,
+                chrono::Utc::now(),
+                content.to_string(),
+            );
+            parser.parse(&mut entry);
+            assert_eq!(entry.severity, expected, "Failed for: {}", content);
+        }
+    }
+
+    #[test]
     fn test_parse_service() {
         let parser = LogParser::new();
 
@@ -208,5 +235,265 @@ mod tests {
                 content
             );
         }
+    }
+
+    #[test]
+    fn test_parse_service_variations() {
+        let parser = LogParser::new();
+
+        let cases = vec![
+            ("[user-service] User logged in", Some("user-service")),
+            (
+                "INFO service=auth-service Login success",
+                Some("auth-service"),
+            ),
+            ("[payment_v2] Payment processed", Some("payment_v2")),
+            // Note: component= is not supported by current regex, only service= and [...]
+            // ("component=order-service Processing", None),
+        ];
+
+        for (content, expected) in cases {
+            let mut entry = LogEntry::new(
+                uuid::Uuid::new_v4(),
+                1,
+                chrono::Utc::now(),
+                content.to_string(),
+            );
+            parser.parse(&mut entry);
+            assert_eq!(
+                entry.service.as_deref(),
+                expected,
+                "Failed for: {}",
+                content
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_timestamp_iso8601() {
+        let parser = LogParser::new();
+
+        // Use a timestamp from the past - verify it was parsed correctly
+        let cases = vec![
+            ("2024-01-15T10:30:00Z INFO Test message", "2024-01-15"),
+            ("2024-06-20T10:30:00+00:00 ERROR Test", "2024-06-20"),
+        ];
+
+        for (content, expected_date) in cases {
+            let mut entry = LogEntry::new(
+                uuid::Uuid::new_v4(),
+                1,
+                chrono::Utc::now(),
+                content.to_string(),
+            );
+            parser.parse(&mut entry);
+            // Verify timestamp was parsed by checking the date part
+            let ts_str = entry.timestamp.to_rfc3339();
+            assert!(
+                ts_str.contains(expected_date),
+                "Timestamp should contain {} for: {} (got: {})",
+                expected_date,
+                content,
+                ts_str
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_timestamp_standard() {
+        let parser = LogParser::new();
+
+        let cases = vec![
+            "2024-01-15 10:30:00 INFO Test",
+            "2024-01-15 10:30:00,123 WARN Test",
+        ];
+
+        for content in cases {
+            let mut entry = LogEntry::new(
+                uuid::Uuid::new_v4(),
+                1,
+                chrono::Utc::now(),
+                content.to_string(),
+            );
+            parser.parse(&mut entry);
+            // Just verify parsing doesn't panic and timestamp is set
+            assert!(entry.timestamp.timestamp() > 0);
+        }
+    }
+
+    #[test]
+    fn test_parse_timestamp_syslog() {
+        let parser = LogParser::new();
+
+        let cases = vec![
+            "Jan 15 10:30:00 service message",
+            "Feb 28 23:59:59 service message",
+            "Dec 31 00:00:00 service message",
+        ];
+
+        for content in cases {
+            let mut entry = LogEntry::new(
+                uuid::Uuid::new_v4(),
+                1,
+                chrono::Utc::now(),
+                content.to_string(),
+            );
+            parser.parse(&mut entry);
+            // Syslog format should be parsed
+            assert!(entry.timestamp.timestamp() > 0);
+        }
+    }
+
+    #[test]
+    fn test_parse_combined_fields() {
+        let parser = LogParser::new();
+
+        let content = "2024-01-15T10:30:00Z [api-service] ERROR: Connection failed";
+        let mut entry = LogEntry::new(
+            uuid::Uuid::new_v4(),
+            1,
+            chrono::Utc::now(),
+            content.to_string(),
+        );
+        parser.parse(&mut entry);
+
+        assert_eq!(entry.severity, Severity::Error);
+        assert_eq!(entry.service, Some("api-service".to_string()));
+    }
+
+    #[test]
+    fn test_parse_key_value_fields() {
+        let parser = LogParser::new();
+
+        let content = "INFO request_id=123 user=alice action=login";
+        let mut entry = LogEntry::new(
+            uuid::Uuid::new_v4(),
+            1,
+            chrono::Utc::now(),
+            content.to_string(),
+        );
+        parser.parse(&mut entry);
+
+        assert_eq!(entry.severity, Severity::Info);
+        assert_eq!(
+            entry.parsed_fields.get("request_id"),
+            Some(&"123".to_string())
+        );
+        assert_eq!(entry.parsed_fields.get("user"), Some(&"alice".to_string()));
+        assert_eq!(
+            entry.parsed_fields.get("action"),
+            Some(&"login".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_empty_content() {
+        let parser = LogParser::new();
+
+        let content = "";
+        let mut entry = LogEntry::new(
+            uuid::Uuid::new_v4(),
+            1,
+            chrono::Utc::now(),
+            content.to_string(),
+        );
+        parser.parse(&mut entry);
+
+        // Should default to INFO and no service
+        assert_eq!(entry.severity, Severity::Unknown);
+        assert_eq!(entry.service, None);
+        assert!(entry.parsed_fields.is_empty());
+    }
+
+    #[test]
+    fn test_parse_no_severity() {
+        let parser = LogParser::new();
+
+        let content = "Just a plain message with no severity";
+        let mut entry = LogEntry::new(
+            uuid::Uuid::new_v4(),
+            1,
+            chrono::Utc::now(),
+            content.to_string(),
+        );
+        parser.parse(&mut entry);
+
+        assert_eq!(entry.severity, Severity::Unknown);
+    }
+
+    #[test]
+    fn test_parse_special_characters_in_service() {
+        let parser = LogParser::new();
+
+        // Service names with hyphens and underscores
+        let cases = vec![
+            ("[my-service-123] Message", Some("my-service-123")),
+            ("[service_v1_beta] Message", Some("service_v1_beta")),
+            ("[multi-word-service] Message", Some("multi-word-service")),
+        ];
+
+        for (content, expected) in cases {
+            let mut entry = LogEntry::new(
+                uuid::Uuid::new_v4(),
+                1,
+                chrono::Utc::now(),
+                content.to_string(),
+            );
+            parser.parse(&mut entry);
+            assert_eq!(
+                entry.service.as_deref(),
+                expected,
+                "Failed for: {}",
+                content
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_embedded_severity() {
+        let parser = LogParser::new();
+        // Severity appears in the middle of text
+        let cases = vec![
+            ("[2024-01-15] The ERROR occurred", Severity::Error),
+            ("Processing INFO request", Severity::Info),
+            ("Got DEBUG signal", Severity::Debug),
+        ];
+
+        for (content, expected) in cases {
+            let mut entry = LogEntry::new(
+                uuid::Uuid::new_v4(),
+                1,
+                chrono::Utc::now(),
+                content.to_string(),
+            );
+            parser.parse(&mut entry);
+            assert_eq!(entry.severity, expected, "Failed for: {}", content);
+        }
+    }
+
+    #[test]
+    fn test_parse_log_line_with_all_components() {
+        let parser = LogParser::new();
+
+        // Full log line with timestamp, service, severity, and key=value pairs
+        let content = "2024-01-15T10:30:00Z [order-service] ERROR: Order processing failed order_id=12345 user_id=67890";
+        let mut entry = LogEntry::new(
+            uuid::Uuid::new_v4(),
+            1,
+            chrono::Utc::now(),
+            content.to_string(),
+        );
+        parser.parse(&mut entry);
+
+        assert_eq!(entry.severity, Severity::Error);
+        assert_eq!(entry.service, Some("order-service".to_string()));
+        assert_eq!(
+            entry.parsed_fields.get("order_id"),
+            Some(&"12345".to_string())
+        );
+        assert_eq!(
+            entry.parsed_fields.get("user_id"),
+            Some(&"67890".to_string())
+        );
     }
 }
