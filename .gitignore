@@ -5,7 +5,6 @@
 *.rs.bk
 *.rlib
 *.prof*
-Cargo.lock
 
 # IDEs
 .idea/

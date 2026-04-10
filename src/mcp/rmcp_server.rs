@@ -54,6 +54,8 @@ impl LogPilotMcpServer {
     async fn search(&self, params: Parameters<SearchParams>) -> Result<CallToolResult, ErrorData> {
         let params = params.0;
 
+        tracing::info!("Search tool called for session: {}", params.session);
+
         if params.session.trim().is_empty() {
             return Err(ErrorData::invalid_params(
                 "Missing required parameter: session",
@@ -120,6 +122,8 @@ impl LogPilotMcpServer {
     #[tool(description = "Get session statistics")]
     async fn stats(&self, params: Parameters<StatsParams>) -> Result<CallToolResult, ErrorData> {
         let session = params.0.session;
+
+        tracing::info!("Stats tool called for session: {}", session);
 
         if session.trim().is_empty() {
             return Err(ErrorData::invalid_params(
@@ -316,22 +320,13 @@ impl LogPilotMcpServer {
 
 impl ServerHandler for LogPilotMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: rmcp::model::ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
                 .build(),
-            server_info: Implementation {
-                name: "logpilot".to_string(),
-                title: None,
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                description: None,
-                icons: None,
-                website_url: None,
-            },
-            instructions: None,
-        }
+        )
+        .with_server_info(Implementation::new("logpilot", env!("CARGO_PKG_VERSION")))
     }
 
     fn list_resources(
@@ -344,6 +339,8 @@ impl ServerHandler for LogPilotMcpServer {
            + '_ {
         async move {
             use rmcp::model::{ListResourcesResult, RawResource, Resource};
+
+            tracing::debug!("list_resources called");
 
             let resources = vec![
                 Resource::new(
@@ -429,6 +426,8 @@ impl ServerHandler for LogPilotMcpServer {
             use rmcp::model::{ListToolsResult, Tool};
             use std::sync::Arc;
 
+            tracing::debug!("list_tools called");
+
             let search_schema: Arc<rmcp::model::JsonObject> = Arc::new(
                 serde_json::from_value(serde_json::json!({
                     "type": "object",
@@ -489,6 +488,7 @@ impl ServerHandler for LogPilotMcpServer {
             use rmcp::model::ErrorData as McpError;
 
             let name = request.name.as_ref();
+            tracing::debug!("call_tool: {}", name);
 
             if name == "search" {
                 let session = request
@@ -559,8 +559,17 @@ pub async fn run_mcp_server() -> anyhow::Result<()> {
     use rmcp::service::serve_server;
     use rmcp::transport::stdio;
 
+    tracing::info!("Starting LogPilot MCP server");
+    tracing::info!("Protocol: Model Context Protocol 2025-06-18");
+    tracing::info!("Version: {}", env!("CARGO_PKG_VERSION"));
+    tracing::info!("Transport: stdio");
+
     let server = LogPilotMcpServer::new();
+    tracing::info!("Server initialized, waiting for connections");
+
     let service = serve_server(server, stdio()).await?;
+    tracing::info!("MCP server started successfully");
+
     service.waiting().await?;
     Ok(())
 }

@@ -104,7 +104,7 @@ fn test_mcp_initialize() {
     let _ = child.kill();
 }
 
-/// Test: MCP server responds to ping
+/// Test: MCP server responds to ping after initialization
 #[test]
 fn test_mcp_ping() {
     let mut child = Command::new("./target/release/logpilot")
@@ -121,23 +121,47 @@ fn test_mcp_ping() {
     let stdin = child.stdin.take().expect("Failed to get stdin");
     let stdout = child.stdout.take().expect("Failed to get stdout");
 
+    // First send initialize request
+    let init_request = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "1.0"}
+        }
+    });
+
+    let mut writer = stdin;
+    writeln!(writer, "{}", init_request.to_string()).expect("Failed to write");
+    writer.flush().expect("Failed to flush");
+
+    // Read initialize response
+    let reader = BufReader::new(stdout);
+    let mut lines = reader.lines();
+    let _init_response = lines
+        .next()
+        .expect("No init response")
+        .expect("Failed to read");
+
+    // Send initialized notification
+    let initialized = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
+    writeln!(writer, "{}", initialized).expect("Failed to write");
+    writer.flush().expect("Failed to flush");
+
     // Send ping request
     let ping_request = json!({
         "jsonrpc": "2.0",
         "id": 42,
         "method": "ping"
     });
-
-    let mut writer = stdin;
     writeln!(writer, "{}", ping_request.to_string()).expect("Failed to write request");
     writer.flush().expect("Failed to flush");
     // Keep stdin open so the server doesn't see connection closed
     std::mem::forget(writer);
 
     // Read response
-    let reader = BufReader::new(stdout);
-    let mut lines = reader.lines();
-
     let response_line = lines
         .next()
         .expect("No response received")
