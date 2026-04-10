@@ -40,10 +40,15 @@ enum Commands {
         #[arg(short, long)]
         last: String,
     },
-    /// Ask a question about the logs (AI-assisted)
+    /// Build a debugging prompt from log data for a session
     Ask {
-        /// Question to ask about the logs
-        question: String,
+        /// tmux session name to query
+        session: String,
+        /// Optional question to include in the prompt
+        question: Option<String>,
+        /// Time window (e.g., 10m, 1h)
+        #[arg(short, long, default_value = "30m")]
+        last: String,
     },
     /// Start MCP server mode
     McpServer {
@@ -87,12 +92,15 @@ async fn main() -> Result<()> {
                 eprintln!("Error: {}", e);
             }
         }
-        Commands::Ask { question } => {
-            info!("Processing question: {}", question);
+        Commands::Ask {
+            session,
+            question,
+            last,
+        } => {
             let args = cli::ask::AskArgs {
-                question: vec![question],
-                context: "10m".to_string(),
-                include_logs: false,
+                session,
+                question,
+                last,
             };
             if let Err(e) = cli::ask::handle(args).await {
                 eprintln!("Error: {}", e);
