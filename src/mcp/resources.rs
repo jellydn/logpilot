@@ -202,7 +202,7 @@ impl ResourceHandler {
                 // Severity filter
                 if let Some(ref sev) = severity_filter {
                     let entry_sev = format!("{:?}", e.severity).to_uppercase();
-                    if !entry_sev.contains(sev) && entry_sev != *sev {
+                    if !entry_sev.contains(sev) {
                         return false;
                     }
                 }

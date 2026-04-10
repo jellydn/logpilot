@@ -210,13 +210,29 @@ impl McpServer {
                     .and_then(|a| a.get("pattern"))
                     .and_then(|p| p.as_str())
                     .unwrap_or("");
+                let severity = params
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("severity"))
+                    .and_then(|s| s.as_str());
 
                 // Get session data
                 let session_data = self.data_store.get_session(session).await;
                 let matches = if let Some(data) = session_data {
                     data.entries
                         .iter()
-                        .filter(|e| e.raw_content.contains(pattern))
+                        .filter(|e| {
+                            // Pattern match
+                            let pattern_match = e.raw_content.contains(pattern);
+                            // Severity filter (if specified)
+                            let severity_match = if let Some(sev) = severity {
+                                let entry_sev = format!("{:?}", e.severity).to_uppercase();
+                                entry_sev == sev.to_uppercase()
+                            } else {
+                                true
+                            };
+                            pattern_match && severity_match
+                        })
                         .take(50)
                         .map(|e| format!("[{}] {}", e.timestamp, e.raw_content))
                         .collect::<Vec<_>>()
@@ -249,7 +265,7 @@ impl McpServer {
                     let error_count = data
                         .entries
                         .iter()
-                        .filter(|e| e.severity as i32 >= 4) // Error or Fatal
+                        .filter(|e| matches!(e.severity, crate::models::Severity::Error | crate::models::Severity::Fatal))
                         .count();
                     format!(
                         "Session: {}\nTotal entries: {}\nErrors/Fatal: {}\nPatterns: {}\nIncidents: {}\nAlerts: {}",
