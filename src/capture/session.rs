@@ -58,6 +58,34 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Start capturing from all panes in the session
+    pub async fn start_capture_all_panes(&self) -> Result<usize> {
+        let session_name = self.session.read().await.name.clone();
+        let pane_ids = TmuxCommand::list_panes(&session_name).await?;
+
+        let mut added = 0;
+        for tmux_id in &pane_ids {
+            match self.add_pane(tmux_id).await {
+                Ok(_) => added += 1,
+                Err(e) => {
+                    warn!("Failed to add pane {}: {}", tmux_id, e);
+                }
+            }
+        }
+
+        // Update session status
+        let mut session = self.session.write().await;
+        session.mark_active();
+
+        info!(
+            "Started capture for session {} with {}/{} panes",
+            session.name,
+            added,
+            pane_ids.len()
+        );
+        Ok(added)
+    }
+
     /// Add a specific pane to capture
     pub async fn add_pane(&self, tmux_id: &str) -> Result<Uuid> {
         let session_id = self.session.read().await.id;
