@@ -151,32 +151,57 @@ impl TmuxCommand {
         Ok(sessions)
     }
 
-    /// List panes for a session
+    /// List all panes for a session (across all windows)
     pub async fn list_panes(session: &str) -> Result<Vec<String>> {
         validate_target(session)?;
 
-        let output = Command::new("tmux")
-            .args(["list-panes", "-t", session, "-F", "#D"])
+        // Get all windows in the session first
+        let windows_output = Command::new("tmux")
+            .args(["list-windows", "-t", session, "-F", "#I"])
             .output()
             .await
             .map_err(LogPilotError::Io)?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        if !windows_output.status.success() {
+            let stderr = String::from_utf8_lossy(&windows_output.stderr);
             return Err(LogPilotError::tmux(format!(
-                "list-panes failed for {}: {}",
+                "list-windows failed for {}: {}",
                 session, stderr
             )));
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let panes: Vec<String> = stdout
+        let windows_stdout = String::from_utf8_lossy(&windows_output.stdout);
+        let windows: Vec<String> = windows_stdout
             .lines()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
 
-        Ok(panes)
+        // Get panes from each window
+        let mut all_panes = Vec::new();
+        for window in windows {
+            let target = format!("{}:{}", session, window);
+            let output = Command::new("tmux")
+                .args(["list-panes", "-t", &target, "-F", "#D"])
+                .output()
+                .await
+                .map_err(LogPilotError::Io)?;
+
+            if !output.status.success() {
+                continue; // Skip windows that fail
+            }
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let panes: Vec<String> = stdout
+                .lines()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            all_panes.extend(panes);
+        }
+
+        Ok(all_panes)
     }
 
     /// Check if a session exists

@@ -7,10 +7,10 @@
 
 use chrono::{Duration, Utc};
 use clap::Args;
-use std::path::PathBuf;
 
-use crate::buffer::persistence::PersistenceStore;
-use crate::models::Severity;
+use crate::capture::tmux::TmuxCommand;
+use crate::models::{LogEntry, Severity};
+use crate::pipeline::parser::LogParser;
 
 /// Build a debugging prompt from log data for a tmux session
 #[derive(Args, Clone)]
@@ -24,6 +24,10 @@ pub struct AskArgs {
     /// Time window to include (e.g., 10m, 1h, 2h)
     #[arg(short, long, default_value = "30m")]
     pub last: String,
+
+    /// Minimum severity level (error, fatal)
+    #[arg(short = 'L', long, default_value = "error")]
+    pub level: String,
 }
 
 pub async fn handle(args: AskArgs) -> anyhow::Result<()> {
@@ -31,24 +35,11 @@ pub async fn handle(args: AskArgs) -> anyhow::Result<()> {
     let window_start = Utc::now() - duration;
     let window_end = Utc::now();
 
-    // Resolve database path using the same convention as Config::default()
-    let db_path: PathBuf = dirs::data_dir()
-        .map(|d| d.join("logpilot").join("logs.db"))
-        .unwrap_or_else(|| PathBuf::from(".logpilot/logs.db"));
+    // Parse severity level
+    let min_severity = parse_level(&args.level);
 
-    // Try to read persisted ERROR/FATAL entries from SQLite
-    let entries = if db_path.exists() {
-        let store = PersistenceStore::new(db_path.to_str().unwrap_or("logs.db")).await?;
-        store
-            .query_entries(window_start, window_end, None)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|e| e.severity >= Severity::Error)
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
+    // Capture directly from tmux session (database doesn't track session name per entry)
+    let entries = capture_from_tmux(&args.session, &window_start, min_severity).await?;
 
     // Build the prompt
     let mut prompt = String::new();
@@ -145,6 +136,80 @@ pub async fn handle(args: AskArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Capture logs directly from tmux session
+async fn capture_from_tmux(
+    session: &str,
+    window_start: &chrono::DateTime<Utc>,
+    min_severity: Severity,
+) -> anyhow::Result<Vec<LogEntry>> {
+    use tokio::process::Command;
+
+    // Verify session exists
+    if !TmuxCommand::session_exists(session).await? {
+        return Err(anyhow::anyhow!("Session '{}' not found", session));
+    }
+
+    // Get all panes in the session
+    let panes = TmuxCommand::list_panes(session).await?;
+    if panes.is_empty() {
+        return Err(anyhow::anyhow!("No panes found in session '{}'", session));
+    }
+
+    let mut entries = Vec::new();
+    let mut sequence: u64 = 0;
+    let parser = LogParser::new();
+
+    // Helper to check if severity meets minimum
+    fn severity_meets_min(sev: Severity, min: Severity) -> bool {
+        // Only include specific severities that meet threshold
+        // Unknown is excluded since it has highest discriminant
+        matches!(
+            (sev, min),
+            (Severity::Fatal, Severity::Fatal)
+                | (Severity::Fatal, Severity::Error)
+                | (Severity::Error, Severity::Error)
+        )
+    }
+
+    // Capture from each pane (last 1000 lines)
+    for pane in panes {
+        let output = Command::new("tmux")
+            .args(["capture-pane", "-p", "-t", &pane, "-S", "-1000"])
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            continue;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        for line in stdout.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            // Create entry and parse it
+            let mut entry =
+                LogEntry::new(uuid::Uuid::nil(), sequence, Utc::now(), trimmed.to_string());
+            parser.parse(&mut entry);
+            sequence += 1;
+
+            // Filter by minimum severity
+            if severity_meets_min(entry.severity, min_severity) {
+                entries.push(entry);
+            }
+        }
+    }
+
+    // Sort by timestamp (most recent first) and filter by time window
+    entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    entries.retain(|e| e.timestamp >= *window_start);
+
+    Ok(entries)
+}
+
 /// Parse duration string (e.g., "10m", "1h", "30s")
 fn parse_duration(s: &str) -> anyhow::Result<Duration> {
     let mut chars = s.chars().peekable();
@@ -174,5 +239,14 @@ fn parse_duration(s: &str) -> anyhow::Result<Duration> {
             unit,
             s
         )),
+    }
+}
+
+/// Parse severity level from string (error, fatal)
+fn parse_level(s: &str) -> Severity {
+    match s.to_lowercase().as_str() {
+        "fatal" => Severity::Fatal,
+        "error" => Severity::Error,
+        _ => Severity::Error, // default to error
     }
 }
