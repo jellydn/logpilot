@@ -167,7 +167,10 @@ async fn main() -> Result<()> {
             } else {
                 info!("Starting MCP server");
             }
-            let args = cli::mcp::McpArgs { verbose };
+            let args = cli::mcp::McpArgs {
+                verbose,
+                legacy: false,
+            };
             if let Err(e) = cli::mcp::handle(args).await {
                 eprintln!("Error: {}", e);
             }

@@ -6,6 +6,8 @@
 pub mod data_store;
 pub mod protocol;
 pub mod resources;
+pub mod rmcp_server;
 pub mod server;
 
+pub use rmcp_server::run_mcp_server;
 pub use server::McpServer;
