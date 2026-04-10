@@ -301,10 +301,16 @@ async fn run_filter_stream(
         // Start pipe-pane to redirect output to FIFO
         let fifo_str = fifo_path.to_string_lossy().to_string();
         let cmd = format!("exec cat >> '{}'", fifo_str.replace('\'', "'\"'\"'"));
-        let _ = Command::new("tmux")
+        let pipe_result = Command::new("tmux")
             .args(["pipe-pane", "-t", &pane_clone, &cmd])
             .output()
             .await;
+
+        if let Err(e) = pipe_result {
+            eprintln!("⚠️  Failed to start pipe-pane for {}: {}", pane_clone, e);
+            let _ = tokio::fs::remove_file(&fifo_path).await;
+            continue; // Skip this pane and continue with others
+        }
 
         tokio::spawn(async move {
             // Open FIFO and read lines

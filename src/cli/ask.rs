@@ -161,14 +161,8 @@ async fn capture_from_tmux(
 
     // Helper to check if severity meets minimum
     fn severity_meets_min(sev: Severity, min: Severity) -> bool {
-        // Only include specific severities that meet threshold
         // Unknown is excluded since it has highest discriminant
-        matches!(
-            (sev, min),
-            (Severity::Fatal, Severity::Fatal)
-                | (Severity::Fatal, Severity::Error)
-                | (Severity::Error, Severity::Error)
-        )
+        sev != Severity::Unknown && sev >= min
     }
 
     // Capture from each pane (last 1000 lines)
