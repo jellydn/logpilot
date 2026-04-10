@@ -5,10 +5,15 @@
 ## Tech Debt
 
 **MCP Server Live Data Integration:**
-- Issue: Partial implementation for live data integration
-- Files: `src/mcp/server.rs`, `src/mcp/resources.rs`
-- Impact: MCP server may not have access to real-time session data
-- Fix approach: Implement proper session data sharing between watch command and MCP server
+- Status: **FIXED** ✅
+- Files: `src/mcp/server.rs`, `src/mcp/data_store.rs`, `src/cli/watch.rs`
+- Solution: Implemented `SessionDataStore` - a thread-safe shared data store using `DashMap` and `RwLock` for concurrent access
+- How it works:
+  1. Watch command creates a `SessionDataStore` for each monitored session
+  2. Log entries, patterns, incidents, and alerts are synced to the store as they're processed
+  3. MCP server reads from the same store when serving resource requests
+  4. Data is automatically cleaned up when the watch command exits
+- Result: MCP server now serves real-time session data to AI assistants
 
 **unwrap() Usage in Tests and Production:**
 - Status: **PARTIALLY FIXED** ✅

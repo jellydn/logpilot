@@ -1,6 +1,7 @@
-use crate::analyzer::{AlertEvaluator, ErrorRateCalculator};
+use crate::analyzer::{AlertEvaluator, Analyzer, ErrorRateCalculator};
 use crate::capture::session::SessionRepository;
 use crate::error::Result;
+use crate::mcp::data_store::SessionDataStore;
 use crate::models::{Alert, LogEntry, Severity};
 use crossterm::event::{self, Event, KeyCode, KeyEvent};
 use std::sync::Arc;
@@ -36,6 +37,14 @@ pub async fn run(options: WatchOptions) -> Result<()> {
     // Create error rate calculator
     let error_calc: Arc<ErrorRateCalculator> = Arc::new(ErrorRateCalculator::new());
 
+    // Create analyzer for pattern/incident detection
+    let analyzer = Arc::new(Analyzer::new());
+
+    // Initialize shared data store for MCP server integration
+    let data_store = SessionDataStore::new();
+    data_store.create_session(&options.session).await;
+    let data_store = Arc::new(data_store);
+
     // Create session repository
     let repo = Arc::new(SessionRepository::new(log_tx));
 
@@ -54,9 +63,14 @@ pub async fn run(options: WatchOptions) -> Result<()> {
     // Print status with visual indicators
     print_status_header(&options.session, options.buffer_minutes);
 
-    // Spawn log processing task with visual severity indicators
+    // Spawn log processing task with visual severity indicators and MCP data sync
     let log_processor = tokio::spawn({
         let error_calc: Arc<ErrorRateCalculator> = Arc::clone(&error_calc);
+        let data_store: Arc<SessionDataStore> = Arc::clone(&data_store);
+        let analyzer: Arc<Analyzer> = Arc::clone(&analyzer);
+        let alert_evaluator: Arc<AlertEvaluator> = Arc::clone(&alert_evaluator);
+        let session_name = options.session.clone();
+
         async move {
             let mut count = 0;
             while let Some(entry) = log_rx.recv().await {
@@ -68,6 +82,50 @@ pub async fn run(options: WatchOptions) -> Result<()> {
                 // Track errors for rate calculation
                 if entry.severity >= Severity::Error {
                     error_calc.record_error(entry.service.as_deref());
+                }
+
+                // Analyze entry for patterns and incidents
+                let analysis = analyzer.process_entry(entry.clone()).await;
+
+                // Sync to shared data store for MCP server access
+                data_store.add_entry(&session_name, entry).await;
+
+                // Update pattern in data store if new pattern detected
+                if analysis.is_new_pattern {
+                    if let Some(pattern) = analyzer
+                        .pattern_tracker()
+                        .await
+                        .get_pattern(&analysis.signature)
+                    {
+                        data_store.upsert_pattern(&session_name, pattern).await;
+                    }
+                }
+
+                // Update incident in data store if incident created
+                if let Some(incident) = analysis.incident {
+                    data_store.upsert_incident(&session_name, incident).await;
+                }
+
+                // Check for alerts
+                if let Some(pattern) = analyzer
+                    .pattern_tracker()
+                    .await
+                    .get_pattern(&analysis.signature)
+                {
+                    if let Some(alert) = alert_evaluator.check_recurring_error(&pattern) {
+                        data_store.upsert_alert(&session_name, alert).await;
+                    }
+                    if let Some(alert) =
+                        alert_evaluator.check_new_exception(&pattern, analysis.is_new_pattern)
+                    {
+                        data_store.upsert_alert(&session_name, alert).await;
+                    }
+                }
+
+                // Check error rate alerts
+                let error_rate = error_calc.calculate_rate(None);
+                if let Some(alert) = alert_evaluator.check_error_rate(error_rate, None) {
+                    data_store.upsert_alert(&session_name, alert).await;
                 }
 
                 if count % 100 == 0 {
@@ -170,6 +228,10 @@ pub async fn run(options: WatchOptions) -> Result<()> {
     connection_checker.abort();
     log_processor.abort();
     alert_processor.abort();
+
+    // Remove session from data store
+    data_store.remove_session(&options.session);
+
     repo.remove_session(&options.session).await?;
 
     println!("Watch stopped");

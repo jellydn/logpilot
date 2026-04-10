@@ -2,37 +2,24 @@
 //!
 //! Provides stdio-based JSON-RPC communication for AI context exchange
 
+use crate::mcp::data_store::{get_or_init_global_store, SessionDataStore};
 use crate::mcp::protocol::*;
 use crate::mcp::resources::ResourceHandler;
-use crate::models::{Alert, Incident, LogEntry, Pattern};
 use chrono::Utc;
 use serde_json::json;
-use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
-use std::sync::Arc;
-use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
 /// MCP Server state and request handler
 pub struct McpServer {
-    /// Session data storage
-    sessions: Arc<RwLock<HashMap<String, SessionData>>>,
+    /// Shared session data store for live data access
+    data_store: SessionDataStore,
     /// Server capabilities
     capabilities: ServerCapabilities,
 }
 
-/// Data for a single monitored session
-#[derive(Debug, Clone, Default)]
-pub struct SessionData {
-    pub entries: Vec<LogEntry>,
-    pub patterns: Vec<Pattern>,
-    pub incidents: Vec<Incident>,
-    pub alerts: Vec<Alert>,
-    pub window_start: chrono::DateTime<chrono::Utc>,
-}
-
 impl McpServer {
-    /// Create a new MCP server
+    /// Create a new MCP server with access to the global data store
     pub fn new() -> Self {
         let capabilities = ServerCapabilities {
             resources: ResourceCapabilities {
@@ -46,32 +33,34 @@ impl McpServer {
             },
         };
 
+        // Get or initialize the global data store for live data access
+        let data_store = get_or_init_global_store();
+
         Self {
-            sessions: Arc::new(RwLock::new(HashMap::new())),
+            data_store,
             capabilities,
         }
     }
 
-    /// Update session data (called from watch command)
-    pub async fn update_session(
-        &self,
-        name: String,
-        entries: Vec<LogEntry>,
-        patterns: Vec<Pattern>,
-        incidents: Vec<Incident>,
-        alerts: Vec<Alert>,
-    ) {
-        let mut sessions = self.sessions.write().await;
-        sessions.insert(
-            name,
-            SessionData {
-                entries,
-                patterns,
-                incidents,
-                alerts,
-                window_start: Utc::now() - chrono::Duration::minutes(30),
+    /// Create a new MCP server with a specific data store (for testing)
+    #[cfg(test)]
+    fn with_data_store(data_store: SessionDataStore) -> Self {
+        let capabilities = ServerCapabilities {
+            resources: ResourceCapabilities {
+                supported_uris: vec![
+                    "logpilot://session/{name}/summary".to_string(),
+                    "logpilot://session/{name}/entries".to_string(),
+                    "logpilot://session/{name}/patterns".to_string(),
+                    "logpilot://session/{name}/incidents".to_string(),
+                    "logpilot://session/{name}/alerts".to_string(),
+                ],
             },
-        );
+        };
+
+        Self {
+            data_store,
+            capabilities,
+        }
     }
 
     /// Handle a single JSON-RPC request and return response
@@ -212,22 +201,23 @@ impl McpServer {
             }
         };
 
-        // Get session data
-        let sessions = self.sessions.read().await;
-        let session_data = match sessions.get(&parsed.session_name) {
-            Some(data) => data.clone(),
+        // Get session data from the shared store (live data from watch command)
+        let session_data = match self.data_store.get_session(&parsed.session_name).await {
+            Some(data) => data,
             None => {
                 return JsonRpcResponse::error(
                     id,
                     JsonRpcError {
                         code: -32002,
-                        message: format!("Session '{}' not found", parsed.session_name),
+                        message: format!(
+                            "Session '{}' not found. Is the watch command running?",
+                            parsed.session_name
+                        ),
                         data: None,
                     },
                 );
             }
         };
-        drop(sessions); // Release lock
 
         // Build resource content based on type
         let content = match parsed.resource_type.as_str() {
@@ -328,6 +318,7 @@ impl Default for McpServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcp::data_store::SessionDataStore;
     use serde_json::json;
 
     #[test]
@@ -373,13 +364,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_update_and_read_session() {
-        let server = McpServer::new();
+    async fn test_read_session_from_data_store() {
+        // Create a data store with test data
+        let data_store = SessionDataStore::new();
+        data_store.create_session("test-session").await;
 
-        // Update session data
-        server
-            .update_session("test-session".to_string(), vec![], vec![], vec![], vec![])
-            .await;
+        // Create server with the data store
+        let server = McpServer::with_data_store(data_store);
 
         // Read resources
         let request = JsonRpcRequest::new(
@@ -390,5 +381,21 @@ mod tests {
 
         assert!(response.result.is_some());
         assert!(response.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_read_missing_session() {
+        let server = McpServer::new();
+
+        // Try to read a session that doesn't exist
+        let request = JsonRpcRequest::new(
+            "resources/read",
+            Some(json!({ "uri": "logpilot://session/nonexistent-session/summary" })),
+        );
+        let response = server.handle_request_async(request).await;
+
+        assert!(response.result.is_none());
+        assert!(response.error.is_some());
+        assert_eq!(response.error.unwrap().code, -32002);
     }
 }

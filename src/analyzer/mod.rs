@@ -93,6 +93,13 @@ impl Analyzer {
             active_patterns: tracker.active_pattern_count(),
         }
     }
+
+    /// Get reference to the pattern tracker for alert checking
+    pub async fn pattern_tracker(
+        &self,
+    ) -> tokio::sync::RwLockReadGuard<'_, patterns::PatternTracker> {
+        self.pattern_tracker.read().await
+    }
 }
 
 impl Default for Analyzer {
