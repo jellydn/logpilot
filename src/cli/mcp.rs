@@ -14,7 +14,7 @@ pub struct McpArgs {
 }
 
 /// Handle the mcp-server command
-pub async fn handle(args: McpArgs) -> anyhow::Result<()> {
+pub async fn handle(_args: McpArgs) -> anyhow::Result<()> {
     // Always print startup message so users know the server is starting
     eprintln!("[LogPilot] MCP server starting...");
     eprintln!("[LogPilot] Protocol: Model Context Protocol 2024-11-05");
