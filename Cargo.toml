@@ -9,6 +9,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/jellydn/logpilot"
 keywords = ["tmux", "logs", "monitoring", "cli", "mcp"]
 categories = ["command-line-utilities", "development-tools"]
+include = ["Cargo.lock", "**/Cargo.toml", "**/README.md", "**/LICENSE*", "src/**/*.rs", "completions/**/*", "config.example.toml"]
 
 [[bin]]
 name = "logpilot"

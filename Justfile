@@ -57,6 +57,27 @@ clean:
 install:
 	cargo install --path .
 
+# Login to crates.io using token from stdin (usage: just login <token>)
+login TOKEN:
+	printf '%s\n' '{{TOKEN}}' | cargo login
+
+# Login to crates.io using CRATES_IO_TOKEN env var
+login-env:
+	test -n "$CRATES_IO_TOKEN" || (echo "CRATES_IO_TOKEN is not set" && exit 1)
+	printf '%s\n' "$CRATES_IO_TOKEN" | cargo login
+
+# Pre-publish checks
+publish-check: fmt test lint
+	cargo package
+
+# Dry run publish to crates.io
+publish-dry-run: publish-check
+	cargo publish --dry-run
+
+# Publish to crates.io
+publish: publish-check
+	cargo publish
+
 # Run clippy with all features and warnings as errors
 lint:
 	cargo clippy --all-features -- -D warnings
