@@ -1,0 +1,48 @@
+# LogPilot Configuration Example
+# Copy this file to ~/.config/logpilot/config.toml and customize
+
+[buffer]
+# Duration to keep logs in memory (in minutes)
+duration_minutes = 30
+
+# Maximum memory usage for buffers (in MB)
+max_memory_mb = 100
+
+# Severities to persist to disk (others stay in memory only)
+persist_severity = ["ERROR", "FATAL"]
+
+# Where to store persisted logs (expanded from ~)
+persist_path = "~/.local/share/logpilot"
+
+[patterns]
+# Custom regex patterns for parsing your log format
+# Each pattern should include named capture groups
+# Available fields: timestamp, level, severity, service, message
+
+custom_patterns = [
+    # Example: ISO8601 timestamp with level and service
+    "^(?P<timestamp>\\d{4}-\\d{2}-\\d{2}T[^ ]+) (?P<level>\\w+) (?P<service>\\w+): (?P<message>.*)$",
+    
+    # Example: Simple logfmt style
+    "^(?P<timestamp>\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}) \\[(?P<level>\\w+)\\] (?P<message>.*)$",
+]
+
+[alerts]
+# Window for recurring error detection (in seconds)
+recurring_error_window_seconds = 60
+
+# Number of occurrences to trigger recurring error alert
+recurring_error_threshold = 5
+
+# Window for restart loop detection (in seconds)
+restart_loop_window_seconds = 30
+
+# Error rate threshold (errors per minute)
+error_rate_threshold_per_minute = 10
+
+[mcp]
+# Enable MCP server for Claude Code integration
+enabled = true
+
+# Transport type (currently only "stdio" supported)
+transport = "stdio"

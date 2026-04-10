@@ -1,0 +1,5 @@
+# Cargo audit configuration
+# Ignore RUSTSEC-2023-0071 because we don't use MySQL - we only use SQLite
+# The rsa crate is a transitive dependency of sqlx-mysql which we don't use
+[advisories]
+ignore = ["RUSTSEC-2023-0071"]

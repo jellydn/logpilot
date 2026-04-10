@@ -1,0 +1,253 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "LogPilot MCP Schema",
+  "description": "Model Context Protocol resources for tmux Log Copilot",
+  "definitions": {
+    "summary": {
+      "type": "object",
+      "required": ["session_name", "generated_at", "window_start", "window_end", "total_entries"],
+      "properties": {
+        "session_name": {
+          "type": "string",
+          "description": "Name of the monitored tmux session"
+        },
+        "generated_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When this summary was generated"
+        },
+        "window_start": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Start of the summarized time window"
+        },
+        "window_end": {
+          "type": "string",
+          "format": "date-time",
+          "description": "End of the summarized time window"
+        },
+        "total_entries": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of log entries in window"
+        },
+        "entries_by_severity": {
+          "type": "object",
+          "description": "Count of entries per severity level",
+          "properties": {
+            "TRACE": { "type": "integer", "minimum": 0 },
+            "DEBUG": { "type": "integer", "minimum": 0 },
+            "INFO": { "type": "integer", "minimum": 0 },
+            "WARN": { "type": "integer", "minimum": 0 },
+            "ERROR": { "type": "integer", "minimum": 0 },
+            "FATAL": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "active_incidents": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/incident_summary" }
+        },
+        "top_patterns": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/pattern_summary" }
+        },
+        "active_alerts": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/alert_summary" }
+        },
+        "services_affected": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Unique service names mentioned in window"
+        }
+      }
+    },
+    "incident_summary": {
+      "type": "object",
+      "required": ["id", "title", "severity", "status", "started_at"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Incident unique identifier"
+        },
+        "title": {
+          "type": "string",
+          "description": "Incident description"
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Active", "Mitigating", "Resolved"]
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "affected_services": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "pattern_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of associated patterns"
+        }
+      }
+    },
+    "pattern_summary": {
+      "type": "object",
+      "required": ["id", "signature", "severity", "occurrence_count", "first_seen", "last_seen"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "signature": {
+          "type": "string",
+          "description": "Pattern hash/signature"
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"]
+        },
+        "occurrence_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "window_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Occurrences in current 60s window"
+        },
+        "first_seen": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "last_seen": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "sample_message": {
+          "type": "string",
+          "description": "Representative log message (truncated)"
+        }
+      }
+    },
+    "alert_summary": {
+      "type": "object",
+      "required": ["id", "type", "triggered_at", "status", "message"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["RecurringError", "RestartLoop", "NewException", "ErrorRate"]
+        },
+        "triggered_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Active", "Acknowledged", "Resolved"]
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable alert description"
+        },
+        "threshold": {
+          "type": "number",
+          "description": "Configured threshold (if applicable)"
+        },
+        "current_value": {
+          "type": "number",
+          "description": "Value at trigger time"
+        }
+      }
+    },
+    "log_entry": {
+      "type": "object",
+      "required": ["id", "sequence", "timestamp", "severity", "raw_content"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Monotonic sequence number per pane"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL", "UNKNOWN"]
+        },
+        "service": {
+          "type": "string",
+          "description": "Service name if parsed"
+        },
+        "raw_content": {
+          "type": "string",
+          "description": "Original log content",
+          "maxLength": 10240
+        },
+        "parsed_fields": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    }
+  },
+  "mcp_resources": {
+    "description": "MCP Resource URIs exposed by LogPilot",
+    "resources": [
+      {
+        "uri": "logpilot://session/{name}/summary",
+        "description": "Current incident summary for session",
+        "schema": "#/definitions/summary"
+      },
+      {
+        "uri": "logpilot://session/{name}/entries?since={timestamp}&until={timestamp}",
+        "description": "Log entries within time range",
+        "schema": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/log_entry" }
+        }
+      },
+      {
+        "uri": "logpilot://session/{name}/patterns",
+        "description": "Detected patterns for session",
+        "schema": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/pattern_summary" }
+        }
+      },
+      {
+        "uri": "logpilot://session/{name}/incidents",
+        "description": "Active incidents for session",
+        "schema": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/incident_summary" }
+        }
+      },
+      {
+        "uri": "logpilot://session/{name}/alerts",
+        "description": "Active alerts for session",
+        "schema": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/alert_summary" }
+        }
+      }
+    ]
+  }
+}

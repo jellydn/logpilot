@@ -1,0 +1,9 @@
+{
+  "ai": "pi",
+  "branch_numbering": "sequential",
+  "here": true,
+  "integration": "pi",
+  "preset": null,
+  "script": "sh",
+  "speckit_version": "0.6.1.dev0"
+}
