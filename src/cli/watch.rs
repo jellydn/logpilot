@@ -1,18 +1,21 @@
 use crate::analyzer::{AlertEvaluator, Analyzer, ErrorRateCalculator};
+use crate::buffer::manager::BufferManager;
 use crate::capture::session::SessionRepository;
 use crate::error::Result;
 use crate::mcp::data_store::SessionDataStore;
 use crate::models::{Alert, LogEntry, Severity};
 use crossterm::event::{self, Event, KeyCode, KeyEvent};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
-use tracing::info;
+use tracing::{info, warn};
 
 /// Options for the watch command
 pub struct WatchOptions {
     pub session: String,
     pub pane: Option<String>,
     pub buffer_minutes: u32,
+    pub level: String,
 }
 
 /// Run the watch command
@@ -21,6 +24,9 @@ pub async fn run(options: WatchOptions) -> Result<()> {
         "Starting watch for session: {} (buffer: {}min)",
         options.session, options.buffer_minutes
     );
+
+    // Parse minimum severity level from options
+    let min_severity = parse_level(&options.level);
 
     // Create channel for log entries
     let (log_tx, mut log_rx) = mpsc::unbounded_channel::<LogEntry>();
@@ -40,6 +46,39 @@ pub async fn run(options: WatchOptions) -> Result<()> {
     // Create analyzer for pattern/incident detection
     let analyzer = Arc::new(Analyzer::new());
 
+    // Initialize buffer manager with SQLite persistence for ERROR/FATAL entries
+    let db_path = dirs::data_dir()
+        .map(|d| d.join("logpilot").join("logs.db"))
+        .unwrap_or_else(|| PathBuf::from(".logpilot/logs.db"));
+
+    // Ensure parent directory exists
+    if let Some(parent) = db_path.parent() {
+        if let Err(e) = tokio::fs::create_dir_all(parent).await {
+            warn!("Failed to create data directory: {}", e);
+        }
+    }
+
+    let buffer_manager = match BufferManager::with_persistence(
+        db_path.to_str().unwrap_or("logs.db"),
+        10000, // capacity
+        options.buffer_minutes,
+        Severity::Error, // persist ERROR and above
+    )
+    .await
+    {
+        Ok(manager) => {
+            info!("Persistence enabled: {}", db_path.display());
+            Arc::new(manager)
+        }
+        Err(e) => {
+            warn!(
+                "Failed to initialize persistence: {}. Running in-memory only.",
+                e
+            );
+            Arc::new(BufferManager::new_in_memory(10000, options.buffer_minutes))
+        }
+    };
+
     // Initialize shared data store for MCP server integration
     let data_store = SessionDataStore::new();
     data_store.create_session(&options.session).await;
@@ -56,8 +95,9 @@ pub async fn run(options: WatchOptions) -> Result<()> {
         // Capture specific pane
         manager.add_pane(&pane).await?;
     } else {
-        // Capture active pane
-        manager.start_capture().await?;
+        // Capture all panes in the session
+        let pane_count = manager.start_capture_all_panes().await?;
+        println!("  Capturing {} pane(s)", pane_count);
     }
 
     // Print status with visual indicators
@@ -69,6 +109,7 @@ pub async fn run(options: WatchOptions) -> Result<()> {
         let data_store: Arc<SessionDataStore> = Arc::clone(&data_store);
         let analyzer: Arc<Analyzer> = Arc::clone(&analyzer);
         let alert_evaluator: Arc<AlertEvaluator> = Arc::clone(&alert_evaluator);
+        let buffer_manager: Arc<BufferManager> = Arc::clone(&buffer_manager);
         let session_name = options.session.clone();
 
         async move {
@@ -76,12 +117,17 @@ pub async fn run(options: WatchOptions) -> Result<()> {
             while let Some(entry) = log_rx.recv().await {
                 count += 1;
 
-                // Visual indicator for severity
-                print_log_entry(&entry);
+                // Visual indicator for severity (filtered by min_severity)
+                print_log_entry(&entry, min_severity);
 
                 // Track errors for rate calculation
                 if entry.severity >= Severity::Error {
                     error_calc.record_error(entry.service.as_deref());
+                }
+
+                // Persist entry to SQLite if severity >= ERROR
+                if let Err(e) = buffer_manager.add_entry(entry.clone()).await {
+                    warn!("Failed to persist entry: {}", e);
                 }
 
                 // Analyze entry for patterns and incidents
@@ -254,7 +300,7 @@ fn print_status_line(icon: &str, session: &str, message: &str) {
 }
 
 /// Print log entry with visual severity indicator
-fn print_log_entry(entry: &LogEntry) {
+fn print_log_entry(entry: &LogEntry, min_severity: Severity) {
     let icon = match entry.severity {
         Severity::Trace => "⚪",
         Severity::Debug => "🔵",
@@ -267,8 +313,8 @@ fn print_log_entry(entry: &LogEntry) {
 
     let label = get_source_label(entry);
 
-    // Only print WARN and above to avoid console spam
-    if entry.severity >= Severity::Warn {
+    // Only print entries meeting minimum severity threshold
+    if entry.severity >= min_severity {
         let content = entry.raw_content.chars().take(80).collect::<String>();
         println!("{} [{}] {}", icon, label, content);
     }
@@ -314,4 +360,18 @@ fn print_help() {
     println!("   q - Quit");
     println!("   ? - Show this help");
     println!();
+}
+
+/// Parse severity level from string
+fn parse_level(s: &str) -> Severity {
+    match s.to_lowercase().as_str() {
+        "trace" => Severity::Trace,
+        "debug" => Severity::Debug,
+        "info" => Severity::Info,
+        "warn" => Severity::Warn,
+        "warning" => Severity::Warn,
+        "error" => Severity::Error,
+        "fatal" => Severity::Fatal,
+        _ => Severity::Warn, // default to warn
+    }
 }

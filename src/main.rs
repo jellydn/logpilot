@@ -33,6 +33,9 @@ enum Commands {
         /// Rolling buffer duration in minutes
         #[arg(short, long, default_value = "30")]
         buffer: u32,
+        /// Minimum severity level to display (trace, debug, info, warn, error, fatal)
+        #[arg(short = 'L', long, default_value = "warn")]
+        level: String,
     },
     /// Filter error lines from a tmux session
     Filter {
@@ -72,6 +75,9 @@ enum Commands {
         /// Time window (e.g., 10m, 1h)
         #[arg(short, long, default_value = "30m")]
         last: String,
+        /// Minimum severity level (error, fatal)
+        #[arg(short = 'L', long, default_value = "error")]
+        level: String,
     },
     /// Start MCP server mode
     McpServer {
@@ -95,11 +101,13 @@ async fn main() -> Result<()> {
             session,
             pane,
             buffer,
+            level,
         } => {
             let options = cli::watch::WatchOptions {
                 session,
                 pane,
                 buffer_minutes: buffer,
+                level,
             };
             cli::watch::run(options).await?;
         }
@@ -141,11 +149,13 @@ async fn main() -> Result<()> {
             session,
             question,
             last,
+            level,
         } => {
             let args = cli::ask::AskArgs {
                 session,
                 question,
                 last,
+                level,
             };
             if let Err(e) = cli::ask::handle(args).await {
                 eprintln!("Error: {}", e);
