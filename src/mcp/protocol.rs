@@ -80,6 +80,14 @@ impl JsonRpcError {
 #[serde(rename_all = "camelCase")]
 pub struct ServerCapabilities {
     pub resources: ResourceCapabilities,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<ToolsCapabilities>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolsCapabilities {
+    pub list_changed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -403,6 +411,7 @@ mod tests {
                 resources: ResourceCapabilities {
                     supported_uris: vec!["logpilot://session/{name}/summary".to_string()],
                 },
+                tools: Some(ToolsCapabilities { list_changed: false }),
             },
             server_info: ServerInfo {
                 name: "logpilot".to_string(),

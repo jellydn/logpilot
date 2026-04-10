@@ -31,6 +31,7 @@ impl McpServer {
                     "logpilot://session/{name}/alerts".to_string(),
                 ],
             },
+            tools: Some(crate::mcp::protocol::ToolsCapabilities { list_changed: false }),
         };
 
         // Get or initialize the global data store for live data access
@@ -55,6 +56,7 @@ impl McpServer {
                     "logpilot://session/{name}/alerts".to_string(),
                 ],
             },
+            tools: Some(crate::mcp::protocol::ToolsCapabilities { list_changed: false }),
         };
 
         Self {
