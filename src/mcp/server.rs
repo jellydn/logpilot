@@ -71,6 +71,7 @@ impl McpServer {
             "initialize" => self.handle_initialize(id, request.params),
             "resources/list" => self.handle_resources_list(id),
             "resources/read" => self.handle_resources_read(id, request.params),
+            "tools/list" => self.handle_tools_list(id),
             "ping" => JsonRpcResponse::success(id, json!({})),
             _ => {
                 warn!("Unknown method: {}", request.method);
@@ -79,12 +80,13 @@ impl McpServer {
         }
     }
 
-    /// Handle async request (for resources/read that needs session data)
+    /// Handle async request (for resources/read and tools/call that need session data)
     pub async fn handle_request_async(&self, request: JsonRpcRequest) -> JsonRpcResponse {
         let id = request.id.clone();
 
         match request.method.as_str() {
             "resources/read" => self.handle_resources_read_async(id, request.params).await,
+            "tools/call" => self.handle_tools_call_async(id, request.params).await,
             _ => self.handle_request(request), // Fall back to sync handler
         }
     }
@@ -114,6 +116,167 @@ impl McpServer {
 
     fn handle_resources_list(&self, id: Option<serde_json::Value>) -> JsonRpcResponse {
         let result = ResourceHandler::list_resources();
+        match serde_json::to_value(result) {
+            Ok(value) => JsonRpcResponse::success(id, value),
+            Err(e) => JsonRpcResponse::error(
+                id,
+                JsonRpcError::internal_error(format!("Failed to serialize: {}", e)),
+            ),
+        }
+    }
+
+    fn handle_tools_list(&self, id: Option<serde_json::Value>) -> JsonRpcResponse {
+        let tools = vec![
+            Tool {
+                name: "search".to_string(),
+                description: "Search log entries by text pattern".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "session": {
+                            "type": "string",
+                            "description": "Session name to search"
+                        },
+                        "pattern": {
+                            "type": "string",
+                            "description": "Text pattern to search for"
+                        },
+                        "severity": {
+                            "type": "string",
+                            "description": "Optional severity filter (ERROR, WARN, etc.)"
+                        }
+                    },
+                    "required": ["session", "pattern"]
+                }),
+            },
+            Tool {
+                name: "stats".to_string(),
+                description: "Get session statistics".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "session": {
+                            "type": "string",
+                            "description": "Session name"
+                        }
+                    },
+                    "required": ["session"]
+                }),
+            },
+        ];
+        let result = ToolsListResult { tools };
+        match serde_json::to_value(result) {
+            Ok(value) => JsonRpcResponse::success(id, value),
+            Err(e) => JsonRpcResponse::error(
+                id,
+                JsonRpcError::internal_error(format!("Failed to serialize: {}", e)),
+            ),
+        }
+    }
+
+    async fn handle_tools_call_async(
+        &self,
+        id: Option<serde_json::Value>,
+        params: Option<serde_json::Value>,
+    ) -> JsonRpcResponse {
+        use crate::mcp::protocol::{ToolContent, ToolsCallParams, ToolsCallResult};
+
+        let params = match params {
+            Some(p) => match serde_json::from_value::<ToolsCallParams>(p) {
+                Ok(params) => params,
+                Err(e) => {
+                    return JsonRpcResponse::error(
+                        id,
+                        JsonRpcError::invalid_params(format!("Invalid params: {}", e)),
+                    );
+                }
+            },
+            None => {
+                return JsonRpcResponse::error(id, JsonRpcError::invalid_params("Missing params"));
+            }
+        };
+
+        let result = match params.name.as_str() {
+            "search" => {
+                let session = params
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("session"))
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("");
+                let pattern = params
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("pattern"))
+                    .and_then(|p| p.as_str())
+                    .unwrap_or("");
+
+                // Get session data
+                let session_data = self.data_store.get_session(session).await;
+                let matches = if let Some(data) = session_data {
+                    data.entries
+                        .iter()
+                        .filter(|e| e.raw_content.contains(pattern))
+                        .take(50)
+                        .map(|e| format!("[{}] {}", e.timestamp, e.raw_content))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                } else {
+                    "Session not found".to_string()
+                };
+
+                ToolsCallResult {
+                    content: vec![ToolContent {
+                        content_type: "text".to_string(),
+                        text: format!(
+                            "Search results for '{}' in {}:\n{}",
+                            pattern, session, matches
+                        ),
+                    }],
+                    is_error: None,
+                }
+            }
+            "stats" => {
+                let session = params
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("session"))
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("");
+
+                let session_data = self.data_store.get_session(session).await;
+                let stats = if let Some(data) = session_data {
+                    let error_count = data
+                        .entries
+                        .iter()
+                        .filter(|e| e.severity as i32 >= 4) // Error or Fatal
+                        .count();
+                    format!(
+                        "Session: {}\nTotal entries: {}\nErrors/Fatal: {}\nPatterns: {}\nIncidents: {}\nAlerts: {}",
+                        session,
+                        data.entries.len(),
+                        error_count,
+                        data.patterns.len(),
+                        data.incidents.len(),
+                        data.alerts.len()
+                    )
+                } else {
+                    format!("Session '{}' not found", session)
+                };
+
+                ToolsCallResult {
+                    content: vec![ToolContent {
+                        content_type: "text".to_string(),
+                        text: stats,
+                    }],
+                    is_error: None,
+                }
+            }
+            _ => {
+                return JsonRpcResponse::error(id, JsonRpcError::method_not_found(&params.name));
+            }
+        };
+
         match serde_json::to_value(result) {
             Ok(value) => JsonRpcResponse::success(id, value),
             Err(e) => JsonRpcResponse::error(
@@ -230,9 +393,11 @@ impl McpServer {
                 session_data.window_start,
                 Utc::now(),
             ),
-            "entries" => {
-                ResourceHandler::build_entries(&parsed.session_name, &session_data.entries)
-            }
+            "entries" => ResourceHandler::build_entries(
+                &parsed.session_name,
+                &session_data.entries,
+                &parsed.query_params,
+            ),
             "patterns" => {
                 ResourceHandler::build_patterns(&parsed.session_name, &session_data.patterns)
             }

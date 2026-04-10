@@ -1,54 +1,62 @@
-# Autoresearch: MCP Standard Compliance
+# Autoresearch: Improve MCP Resources and Tools
 
 ## Objective
-Make LogPilot's MCP implementation fully compliant with the Model Context Protocol standard and verify it using the MCP inspector tool. Focus on protocol correctness, error handling, and resource discovery.
+Enhance LogPilot's MCP server with additional resources and tools for better AI integration. Focus on:
+1. Adding new resource types (filters, query parameters)
+2. Implementing MCP tools (not just resources)
+3. Improving resource content with better metadata
+4. Adding resource templates with proper URI template syntax
 
 ## Metrics
-- **Primary**: mcp_inspector_pass_rate (%, higher is better) — percentage of inspector tests passing
-- **Secondary**: protocol_errors_count (lower is better), resource_discovery_time_ms (lower is better)
+- **Primary**: resource_coverage_score (%, higher is better) - percentage of useful log analysis features exposed via MCP
+- **Secondary**: tool_count (higher is better), avg_response_size_bytes (lower is better for performance)
 
 ## How to Run
-`./autoresearch.sh` — installs MCP inspector if needed, runs it against the server, outputs `METRIC mcp_inspector_pass_rate=X`.
+`./autoresearch.sh` - runs tests and validates MCP resource/tool coverage
 
 ## Files in Scope
-- `src/mcp/protocol.rs` — JSON-RPC 2.0 message types, request/response handling
-- `src/mcp/server.rs` — MCP server implementation, request handlers
-- `src/mcp/resources.rs` — Resource handler for session data
-- `src/mcp/data_store.rs` — Shared data store for live session data
-- `src/cli/mcp.rs` — MCP server command entry point
-- `Cargo.toml` — may need to add MCP SDK dependency
+- `src/mcp/resources.rs` - Resource definitions and handlers
+- `src/mcp/server.rs` - MCP server request handlers
+- `src/mcp/protocol.rs` - Protocol types (may need Tool types)
+- `tests/test_mcp_protocol.rs` - Tests for MCP functionality
 
 ## Off Limits
-- Core log capture logic (tmux interaction, parsing)
+- Core log capture (tmux, parsing)
 - CLI commands other than mcp-server
-- Buffer management and persistence
+- Database schema changes
 
 ## Constraints
-- Must maintain backward compatibility with existing MCP clients
-- Must use stdio transport (as per MCP spec)
-- Must support all required MCP methods: initialize, resources/list, resources/read, ping
-- Protocol version must be "2024-11-05"
-- Tests must pass (`cargo test --all-features`)
+- Must maintain backward compatibility with existing resources
+- Must follow MCP 2024-11-05 protocol spec
+- All new features must have tests
+- Response sizes should be reasonable (<100KB default)
+
+## Current Resources
+1. `logpilot://session/{name}/summary` - Session overview
+2. `logpilot://session/{name}/entries` - Log entries
+3. `logpilot://session/{name}/patterns` - Error patterns
+4. `logpilot://session/{name}/incidents` - Active incidents
+5. `logpilot://session/{name}/alerts` - Active alerts
+
+## Proposed Additions
+- Query parameters for filtering (severity, time range, service)
+- Pagination support for large entry lists
+- Statistics/analytics resource
+- Search tool for complex queries
+- Export resource for formatted output
 
 ## What's Been Tried
 
 ### Current State
-- Basic MCP server structure exists with stdio transport
-- Implements: initialize, resources/list, resources/read, ping
-- Protocol version: 2024-11-05
-- JSON-RPC 2.0 message types implemented
-- Resource URIs: logpilot://session/{name}/summary, entries, patterns, incidents, alerts
+- 5 basic resources implemented
+- Simple query parameter parsing exists
+- No pagination (returns max 100 entries)
+- No tools (only resources)
+- No filtering by severity/time in entries resource
 
-### Known Issues
-1. No proper MCP SDK integration - hand-rolled protocol implementation
-2. No validation against official MCP inspector
-3. Error handling may not match MCP spec exactly
-4. No support for notifications (client → server)
-5. Resource templates may not follow MCP URI template spec
-
-### Potential Improvements
-1. Add `rmcp` (Rust MCP SDK) for standard compliance
-2. Use MCP inspector for automated testing
-3. Add proper logging/tracing for debugging
-4. Implement notification support if needed
-5. Add resource subscription support
+### Ideas for Improvement
+1. Add `severity` query param to entries resource
+2. Add `since` and `until` time filters
+3. Implement `tools/search` for text search
+4. Add pagination with `limit` and `offset`
+5. Create `stats` resource with aggregated metrics
