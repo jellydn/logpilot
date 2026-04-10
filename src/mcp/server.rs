@@ -444,10 +444,15 @@ impl McpServer {
             };
 
             // Handle request
-            let response = self.handle_request_async(request).await;
+            let response = self.handle_request_async(request.clone()).await;
 
-            // Write response
-            Self::write_response(&mut stdout_lock, &response)?;
+            // Only send response if request has an id (not a notification)
+            // Per MCP spec, notifications have no id and don't get a response
+            if request.id.is_some() {
+                Self::write_response(&mut stdout_lock, &response)?;
+            } else {
+                debug!("Notification processed (no response sent)");
+            }
         }
 
         info!("MCP server shutting down");
