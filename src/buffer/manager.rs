@@ -74,24 +74,8 @@ impl BufferManager {
     pub async fn add_entry(&self, entry: LogEntry) -> Result<()> {
         let pane_id = entry.pane_id;
 
-        // Ensure buffer exists
-        {
-            let buffers = self.buffers.read().await;
-            if !buffers.contains_key(&pane_id) {
-                drop(buffers);
-                self.create_buffer(pane_id).await;
-            }
-        }
-
-        // Add to ring buffer
-        {
-            let mut buffers = self.buffers.write().await;
-            if let Some(buffer) = buffers.get_mut(&pane_id) {
-                buffer.push(entry.clone());
-            }
-        }
-
-        // Persist if severity threshold met
+        // Persist first if severity threshold met (before in-memory)
+        // This ensures memory and persistence stay in sync on failure
         if let Some(ref persistence) = self.persistence {
             if entry.severity >= self.persist_severity {
                 persistence
@@ -99,6 +83,13 @@ impl BufferManager {
                     .await?;
             }
         }
+
+        // Now add to in-memory buffer (persistence succeeded or not needed)
+        let mut buffers = self.buffers.write().await;
+        let buffer = buffers
+            .entry(pane_id)
+            .or_insert_with(|| RingBuffer::new(self.capacity, self.retention_minutes));
+        buffer.push(entry.clone());
 
         Ok(())
     }

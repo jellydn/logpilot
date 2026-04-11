@@ -2,7 +2,7 @@
 
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg?cacheSeconds=2592000)](https://github.com/jellydn/logpilot/releases)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.86%2B-orange.svg)](https://rust-lang.org)
 [![CI](https://github.com/jellydn/logpilot/workflows/CI/badge.svg)](https://github.com/jellydn/logpilot/actions)
 
 > AI-Native tmux Log Copilot for Support Incident Tracking

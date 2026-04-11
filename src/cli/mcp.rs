@@ -2,7 +2,6 @@
 //!
 //! Usage: logpilot mcp-server
 
-use crate::mcp::McpServer;
 use clap::Args;
 
 /// Run LogPilot as an MCP server
@@ -15,14 +14,14 @@ pub struct McpArgs {
 
 /// Handle the mcp-server command
 pub async fn handle(_args: McpArgs) -> anyhow::Result<()> {
-    // Legacy implementation
+    // Legacy implementation (rmcp disabled due to Rust 1.86 compatibility)
     eprintln!("[LogPilot] MCP server starting...");
     eprintln!("[LogPilot] Protocol: Model Context Protocol 2024-11-05");
     eprintln!("[LogPilot] Version: {}", env!("CARGO_PKG_VERSION"));
     eprintln!("[LogPilot] Transport: stdio");
     eprintln!("[LogPilot] Resources: logpilot://session/{{name}}/summary, entries, patterns, incidents, alerts");
 
-    let server = McpServer::new();
+    let server = crate::mcp::McpServer::new();
     eprintln!("[LogPilot] MCP server ready - waiting for connections");
     server.run_stdio().await?;
 

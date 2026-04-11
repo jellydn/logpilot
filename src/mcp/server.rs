@@ -31,6 +31,9 @@ impl McpServer {
                     "logpilot://session/{name}/alerts".to_string(),
                 ],
             },
+            tools: Some(crate::mcp::protocol::ToolsCapabilities {
+                list_changed: false,
+            }),
         };
 
         // Get or initialize the global data store for live data access
@@ -55,6 +58,9 @@ impl McpServer {
                     "logpilot://session/{name}/alerts".to_string(),
                 ],
             },
+            tools: Some(crate::mcp::protocol::ToolsCapabilities {
+                list_changed: false,
+            }),
         };
 
         Self {
@@ -71,6 +77,7 @@ impl McpServer {
             "initialize" => self.handle_initialize(id, request.params),
             "resources/list" => self.handle_resources_list(id),
             "resources/read" => self.handle_resources_read(id, request.params),
+            "tools/list" => self.handle_tools_list(id),
             "ping" => JsonRpcResponse::success(id, json!({})),
             _ => {
                 warn!("Unknown method: {}", request.method);
@@ -79,12 +86,13 @@ impl McpServer {
         }
     }
 
-    /// Handle async request (for resources/read that needs session data)
+    /// Handle async request (for resources/read and tools/call that need session data)
     pub async fn handle_request_async(&self, request: JsonRpcRequest) -> JsonRpcResponse {
         let id = request.id.clone();
 
         match request.method.as_str() {
             "resources/read" => self.handle_resources_read_async(id, request.params).await,
+            "tools/call" => self.handle_tools_call_async(id, request.params).await,
             _ => self.handle_request(request), // Fall back to sync handler
         }
     }
@@ -95,7 +103,7 @@ impl McpServer {
         _params: Option<serde_json::Value>,
     ) -> JsonRpcResponse {
         let result = InitializeResult {
-            protocol_version: "2024-11-05".to_string(),
+            protocol_version: "2025-06-18".to_string(),
             capabilities: self.capabilities.clone(),
             server_info: ServerInfo {
                 name: "logpilot".to_string(),
@@ -114,6 +122,180 @@ impl McpServer {
 
     fn handle_resources_list(&self, id: Option<serde_json::Value>) -> JsonRpcResponse {
         let result = ResourceHandler::list_resources();
+        match serde_json::to_value(result) {
+            Ok(value) => JsonRpcResponse::success(id, value),
+            Err(e) => JsonRpcResponse::error(
+                id,
+                JsonRpcError::internal_error(format!("Failed to serialize: {}", e)),
+            ),
+        }
+    }
+
+    fn handle_tools_list(&self, id: Option<serde_json::Value>) -> JsonRpcResponse {
+        let tools = vec![
+            Tool {
+                name: "search".to_string(),
+                description: "Search log entries by text pattern".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "session": {
+                            "type": "string",
+                            "description": "Session name to search"
+                        },
+                        "pattern": {
+                            "type": "string",
+                            "description": "Text pattern to search for"
+                        },
+                        "severity": {
+                            "type": "string",
+                            "description": "Optional severity filter (ERROR, WARN, etc.)"
+                        }
+                    },
+                    "required": ["session", "pattern"]
+                }),
+            },
+            Tool {
+                name: "stats".to_string(),
+                description: "Get session statistics".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "session": {
+                            "type": "string",
+                            "description": "Session name"
+                        }
+                    },
+                    "required": ["session"]
+                }),
+            },
+        ];
+        let result = ToolsListResult { tools };
+        match serde_json::to_value(result) {
+            Ok(value) => JsonRpcResponse::success(id, value),
+            Err(e) => JsonRpcResponse::error(
+                id,
+                JsonRpcError::internal_error(format!("Failed to serialize: {}", e)),
+            ),
+        }
+    }
+
+    async fn handle_tools_call_async(
+        &self,
+        id: Option<serde_json::Value>,
+        params: Option<serde_json::Value>,
+    ) -> JsonRpcResponse {
+        use crate::mcp::protocol::{ToolContent, ToolsCallParams, ToolsCallResult};
+
+        let params = match params {
+            Some(p) => match serde_json::from_value::<ToolsCallParams>(p) {
+                Ok(params) => params,
+                Err(e) => {
+                    return JsonRpcResponse::error(
+                        id,
+                        JsonRpcError::invalid_params(format!("Invalid params: {}", e)),
+                    );
+                }
+            },
+            None => {
+                return JsonRpcResponse::error(id, JsonRpcError::invalid_params("Missing params"));
+            }
+        };
+
+        let result = match params.name.as_str() {
+            "search" => {
+                // Validate required arguments
+                let session = params
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("session"))
+                    .and_then(|s| s.as_str());
+                let pattern = params
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("pattern"))
+                    .and_then(|p| p.as_str());
+
+                // Return invalid_params error if required args are missing
+                let (session, pattern) = match (session, pattern) {
+                    (Some(s), Some(p)) if !s.is_empty() && !p.is_empty() => (s, p),
+                    _ => {
+                        return JsonRpcResponse::error(
+                            id,
+                            JsonRpcError::invalid_params(
+                                "Missing required arguments: 'session' and 'pattern' are required and must be non-empty"
+                            ),
+                        );
+                    }
+                };
+
+                let severity = params
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("severity"))
+                    .and_then(|s| s.as_str());
+
+                // Get search results with proper error handling
+                let (text, is_error) = match self.search_session(session, pattern, severity).await {
+                    Ok(r) => (
+                        format!("Search results for '{}' in {}:\n{}", pattern, session, r),
+                        None,
+                    ),
+                    Err(e) => (format!("Error searching '{}': {}", session, e), Some(true)),
+                };
+
+                ToolsCallResult {
+                    content: vec![ToolContent {
+                        content_type: "text".to_string(),
+                        text,
+                    }],
+                    is_error,
+                }
+            }
+            "stats" => {
+                // Validate required session argument
+                let session = params
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("session"))
+                    .and_then(|s| s.as_str());
+
+                let session = match session {
+                    Some(s) if !s.is_empty() => s,
+                    _ => {
+                        return JsonRpcResponse::error(
+                            id,
+                            JsonRpcError::invalid_params(
+                                "Missing required argument: 'session' is required and must be non-empty"
+                            ),
+                        );
+                    }
+                };
+
+                let (stats, is_error) = match self.get_session_stats(session).await {
+                    Ok(s) => (s, None),
+                    Err(e) => (
+                        format!("Error getting stats for '{}': {}", session, e),
+                        Some(true),
+                    ),
+                };
+
+                ToolsCallResult {
+                    content: vec![ToolContent {
+                        content_type: "text".to_string(),
+                        text: stats,
+                    }],
+                    is_error,
+                }
+            }
+            _ => {
+                return JsonRpcResponse::error(
+                    id,
+                    JsonRpcError::method_not_found(&format!("tools/call: {}", params.name)),
+                );
+            }
+        };
+
         match serde_json::to_value(result) {
             Ok(value) => JsonRpcResponse::success(id, value),
             Err(e) => JsonRpcResponse::error(
@@ -230,9 +412,11 @@ impl McpServer {
                 session_data.window_start,
                 Utc::now(),
             ),
-            "entries" => {
-                ResourceHandler::build_entries(&parsed.session_name, &session_data.entries)
-            }
+            "entries" => ResourceHandler::build_entries(
+                &parsed.session_name,
+                &session_data.entries,
+                &parsed.query_params,
+            ),
             "patterns" => {
                 ResourceHandler::build_patterns(&parsed.session_name, &session_data.patterns)
             }
@@ -311,6 +495,222 @@ impl McpServer {
         debug!("Sending: {}", json);
         writeln!(writer, "{}", json)?;
         writer.flush()
+    }
+
+    /// Get stats for a session, capturing from tmux if not in data store
+    async fn get_session_stats(&self, session_name: &str) -> anyhow::Result<String> {
+        use crate::capture::tmux::TmuxCommand;
+        use crate::models::LogEntry;
+        use crate::pipeline::parser::LogParser;
+        use tokio::process::Command;
+
+        // First try data store (if watch is running)
+        if let Some(data) = self.data_store.get_session(session_name).await {
+            let error_count = data
+                .entries
+                .iter()
+                .filter(|e| {
+                    matches!(
+                        e.severity,
+                        crate::models::Severity::Error | crate::models::Severity::Fatal
+                    )
+                })
+                .count();
+            return Ok(format!(
+                "Session: {}\nTotal entries: {}\nErrors/Fatal: {}\nPatterns: {}\nIncidents: {}\nAlerts: {}\n(Source: live data)",
+                session_name,
+                data.entries.len(),
+                error_count,
+                data.patterns.len(),
+                data.incidents.len(),
+                data.alerts.len()
+            ));
+        }
+
+        // Otherwise, capture a snapshot from tmux
+        // Verify session exists
+        if !TmuxCommand::session_exists(session_name).await? {
+            return Ok(format!("Session '{}' not found", session_name));
+        }
+
+        // Get panes
+        let panes = TmuxCommand::list_panes(session_name).await?;
+        if panes.is_empty() {
+            return Ok(format!("No panes found in session '{}'", session_name));
+        }
+
+        // Capture from each pane
+        let mut total_entries = 0;
+        let mut error_count = 0;
+        let parser = LogParser::new();
+
+        for pane in panes {
+            let output = Command::new("tmux")
+                .args(["capture-pane", "-p", "-t", &pane, "-S", "-100"])
+                .output()
+                .await?;
+
+            if !output.status.success() {
+                continue;
+            }
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+
+                let mut entry = LogEntry::new(
+                    uuid::Uuid::nil(),
+                    total_entries as u64,
+                    chrono::Utc::now(),
+                    trimmed.to_string(),
+                );
+                parser.parse(&mut entry);
+                total_entries += 1;
+
+                if matches!(
+                    entry.severity,
+                    crate::models::Severity::Error | crate::models::Severity::Fatal
+                ) {
+                    error_count += 1;
+                }
+            }
+        }
+
+        Ok(format!(
+            "Session: {}\nTotal entries: {}\nErrors/Fatal: {}\n(Source: snapshot capture)\nNote: Run 'logpilot watch {}' for live monitoring",
+            session_name,
+            total_entries,
+            error_count,
+            session_name
+        ))
+    }
+
+    /// Search a session for pattern, capturing from tmux if not in data store
+    async fn search_session(
+        &self,
+        session_name: &str,
+        pattern: &str,
+        severity: Option<&str>,
+    ) -> anyhow::Result<String> {
+        use crate::capture::tmux::TmuxCommand;
+        use crate::models::LogEntry;
+        use crate::pipeline::parser::LogParser;
+        use tokio::process::Command;
+
+        // First try data store (if watch is running)
+        if let Some(data) = self.data_store.get_session(session_name).await {
+            let matches: Vec<String> = data
+                .entries
+                .iter()
+                .filter(|e| {
+                    // Pattern match
+                    let pattern_match = e.raw_content.contains(pattern);
+                    // Severity filter (if specified)
+                    let severity_match = if let Some(sev) = severity {
+                        let entry_sev = format!("{:?}", e.severity).to_uppercase();
+                        entry_sev == sev.to_uppercase()
+                    } else {
+                        true
+                    };
+                    pattern_match && severity_match
+                })
+                .take(50)
+                .map(|e| format!("[{}] {}", e.timestamp, e.raw_content))
+                .collect();
+
+            if matches.is_empty() {
+                return Ok("No matches found (Source: live data)".to_string());
+            }
+            return Ok(format!(
+                "{} matches (Source: live data)\n{}",
+                matches.len(),
+                matches.join("\n")
+            ));
+        }
+
+        // Otherwise, capture a snapshot from tmux
+        // Verify session exists
+        if !TmuxCommand::session_exists(session_name).await? {
+            return Ok(format!("Session '{}' not found", session_name));
+        }
+
+        // Get panes
+        let panes = TmuxCommand::list_panes(session_name).await?;
+        if panes.is_empty() {
+            return Ok(format!("No panes found in session '{}'", session_name));
+        }
+
+        // Capture from each pane
+        let mut matches: Vec<String> = Vec::new();
+        let parser = LogParser::new();
+
+        for pane in panes {
+            let output = Command::new("tmux")
+                .args(["capture-pane", "-p", "-t", &pane, "-S", "-100"])
+                .output()
+                .await?;
+
+            if !output.status.success() {
+                continue;
+            }
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+
+                // Check pattern match first (cheaper than parsing)
+                if !trimmed.contains(pattern) {
+                    continue;
+                }
+
+                let mut entry = LogEntry::new(
+                    uuid::Uuid::nil(),
+                    0,
+                    chrono::Utc::now(),
+                    trimmed.to_string(),
+                );
+                parser.parse(&mut entry);
+
+                // Severity filter (if specified)
+                let severity_match = if let Some(sev) = severity {
+                    let entry_sev = format!("{:?}", entry.severity).to_uppercase();
+                    entry_sev == sev.to_uppercase()
+                } else {
+                    true
+                };
+
+                if severity_match {
+                    matches.push(format!("[{}] {}", entry.timestamp, trimmed));
+                    if matches.len() >= 50 {
+                        break;
+                    }
+                }
+            }
+
+            if matches.len() >= 50 {
+                break;
+            }
+        }
+
+        if matches.is_empty() {
+            return Ok(format!(
+                "No matches found (Source: snapshot capture)\nNote: Run 'logpilot watch {}' for live monitoring",
+                session_name
+            ));
+        }
+
+        Ok(format!(
+            "{} matches (Source: snapshot capture)\n{}\n\nNote: Run 'logpilot watch {}' for live monitoring",
+            matches.len(),
+            matches.join("\n"),
+            session_name
+        ))
     }
 }
 

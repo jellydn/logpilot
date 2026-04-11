@@ -77,6 +77,8 @@ impl SessionData {
     }
 }
 
+const SESSION_STALE_MINUTES: i64 = 60; // Sessions not updated in 60 mins are stale
+
 /// Thread-safe shared store for session data
 ///
 /// This store is shared between the watch command (which writes data)
@@ -92,6 +94,46 @@ impl SessionDataStore {
     pub fn new() -> Self {
         Self {
             sessions: Arc::new(DashMap::new()),
+        }
+    }
+
+    /// Clean up stale sessions (not updated in SESSION_STALE_MINUTES)
+    pub async fn cleanup_stale_sessions(&self) {
+        let now = Utc::now();
+        let stale_threshold = now - chrono::Duration::minutes(SESSION_STALE_MINUTES);
+
+        // First pass: identify potentially stale sessions
+        let potentially_stale: Vec<String> = self
+            .sessions
+            .iter()
+            .filter(|entry| {
+                if let Ok(data) = entry.value().try_read() {
+                    data.last_updated < stale_threshold
+                } else {
+                    false // Skip if can't acquire read lock
+                }
+            })
+            .map(|entry| entry.key().clone())
+            .collect();
+
+        // Second pass: re-check under write lock before removal to avoid TOCTOU race
+        for session_name in potentially_stale {
+            if let Some(entry) = self.sessions.get(&session_name) {
+                // Re-check staleness with proper locking
+                let should_remove = match entry.try_write() {
+                    Ok(data) => data.last_updated < stale_threshold,
+                    Err(_) => {
+                        // If we can't get write lock, session is active - skip
+                        false
+                    }
+                };
+
+                if should_remove {
+                    tracing::info!("Removing stale session: {}", session_name);
+                    drop(entry); // Release the ref before removing
+                    self.sessions.remove(&session_name);
+                }
+            }
         }
     }
 

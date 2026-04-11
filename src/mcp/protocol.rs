@@ -80,6 +80,14 @@ impl JsonRpcError {
 #[serde(rename_all = "camelCase")]
 pub struct ServerCapabilities {
     pub resources: ResourceCapabilities,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<ToolsCapabilities>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolsCapabilities {
+    pub list_changed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,6 +169,48 @@ pub struct ResourcesReadParams {
 #[serde(rename_all = "camelCase")]
 pub struct ResourcesReadResult {
     pub contents: Vec<ResourceContent>,
+}
+
+/// MCP Tool definition
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Tool {
+    pub name: String,
+    pub description: String,
+    pub input_schema: Value,
+}
+
+/// Tools/list result
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolsListResult {
+    pub tools: Vec<Tool>,
+}
+
+/// Tools/call params
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolsCallParams {
+    pub name: String,
+    pub arguments: Option<Value>,
+}
+
+/// Tools/call result
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolsCallResult {
+    pub content: Vec<ToolContent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_error: Option<bool>,
+}
+
+/// Tool response content
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolContent {
+    #[serde(rename = "type")]
+    pub content_type: String,
+    pub text: String,
 }
 
 impl JsonRpcRequest {
@@ -286,7 +336,7 @@ mod tests {
 
     #[test]
     fn test_jsonrpc_request_deserialization() {
-        let json = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}"#;
+        let json = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#;
         let request: JsonRpcRequest = serde_json::from_str(json).unwrap();
         assert_eq!(request.jsonrpc, "2.0");
         assert_eq!(request.method, "initialize");
@@ -296,7 +346,7 @@ mod tests {
     #[test]
     fn test_jsonrpc_response_deserialization() {
         let json =
-            r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05"},"error":null}"#;
+            r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"},"error":null}"#;
         let response: JsonRpcResponse = serde_json::from_str(json).unwrap();
         assert_eq!(response.jsonrpc, "2.0");
         assert!(response.result.is_some());
@@ -356,11 +406,14 @@ mod tests {
     #[test]
     fn test_initialize_result_serialization() {
         let result = InitializeResult {
-            protocol_version: "2024-11-05".to_string(),
+            protocol_version: "2025-06-18".to_string(),
             capabilities: ServerCapabilities {
                 resources: ResourceCapabilities {
                     supported_uris: vec!["logpilot://session/{name}/summary".to_string()],
                 },
+                tools: Some(ToolsCapabilities {
+                    list_changed: false,
+                }),
             },
             server_info: ServerInfo {
                 name: "logpilot".to_string(),
@@ -369,7 +422,7 @@ mod tests {
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("protocolVersion"));
-        assert!(json.contains("2024-11-05"));
+        assert!(json.contains("2025-06-18"));
         assert!(json.contains("serverInfo"));
         assert!(json.contains("logpilot"));
     }

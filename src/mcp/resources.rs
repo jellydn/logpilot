@@ -90,12 +90,9 @@ impl ResourceHandler {
 
     fn parse_query(query: &str) -> HashMap<String, String> {
         let mut params = HashMap::new();
-        for part in query.split('&') {
-            if let Some(eq) = part.find('=') {
-                let key = part[..eq].to_string();
-                let value = part[eq + 1..].to_string();
-                params.insert(key, value);
-            }
+        // Use url::form_urlencoded::parse for proper percent-decoding
+        for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+            params.insert(key.into_owned(), value.into_owned());
         }
         params
     }
@@ -177,9 +174,74 @@ impl ResourceHandler {
         }
     }
 
-    /// Build entries resource content
-    pub fn build_entries(session_name: &str, entries: &[LogEntry]) -> ResourceContent {
-        let entries_json: Vec<serde_json::Value> = entries
+    /// Build entries resource content with optional filtering
+    pub fn build_entries(
+        session_name: &str,
+        entries: &[LogEntry],
+        query_params: &HashMap<String, String>,
+    ) -> ResourceContent {
+        use chrono::DateTime;
+
+        // Parse filter parameters
+        let severity_filter = query_params.get("severity").map(|s| s.to_uppercase());
+        let service_filter = query_params.get("service").cloned();
+        let limit = query_params
+            .get("limit")
+            .and_then(|l| l.parse::<usize>().ok())
+            .map(|l| l.min(1000)) // Clamp to max 1000
+            .unwrap_or(100);
+        let offset = query_params
+            .get("offset")
+            .and_then(|o| o.parse::<usize>().ok())
+            .unwrap_or(0);
+
+        // Parse time range filters
+        let since = query_params
+            .get("since")
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&Utc));
+        let until = query_params
+            .get("until")
+            .and_then(|u| DateTime::parse_from_rfc3339(u).ok())
+            .map(|dt| dt.with_timezone(&Utc));
+
+        // Filter entries
+        let filtered: Vec<&LogEntry> = entries
+            .iter()
+            .filter(|e| {
+                // Time range filter (since)
+                if let Some(since_dt) = since {
+                    if e.timestamp < since_dt {
+                        return false;
+                    }
+                }
+                // Time range filter (until)
+                if let Some(until_dt) = until {
+                    if e.timestamp > until_dt {
+                        return false;
+                    }
+                }
+                // Severity filter (exact match, case-insensitive)
+                if let Some(ref sev) = severity_filter {
+                    let entry_sev = format!("{:?}", e.severity).to_uppercase();
+                    let normalized_sev = sev.to_uppercase();
+                    if entry_sev != normalized_sev {
+                        return false;
+                    }
+                }
+                // Service filter
+                if let Some(ref svc) = service_filter {
+                    if e.service.as_ref() != Some(svc) {
+                        return false;
+                    }
+                }
+                true
+            })
+            .skip(offset)
+            .take(limit)
+            .collect();
+
+        let entries_json: Vec<serde_json::Value> = filtered
             .iter()
             .map(|e| {
                 json!({
@@ -194,10 +256,71 @@ impl ResourceHandler {
             })
             .collect();
 
+        // Calculate total after filtering (before pagination)
+        let filtered_total = entries
+            .iter()
+            .filter(|e| {
+                // Time range filter (since)
+                if let Some(since_dt) = since {
+                    if e.timestamp < since_dt {
+                        return false;
+                    }
+                }
+                // Time range filter (until)
+                if let Some(until_dt) = until {
+                    if e.timestamp > until_dt {
+                        return false;
+                    }
+                }
+                // Severity filter (exact match, case-insensitive)
+                if let Some(ref sev) = severity_filter {
+                    let entry_sev = format!("{:?}", e.severity).to_uppercase();
+                    let normalized_sev = sev.to_uppercase();
+                    if entry_sev != normalized_sev {
+                        return false;
+                    }
+                }
+                if let Some(ref svc) = service_filter {
+                    if e.service.as_ref() != Some(svc) {
+                        return false;
+                    }
+                }
+                true
+            })
+            .count();
+
+        let result = json!({
+            "entries": entries_json,
+            "pagination": {
+                "total": filtered_total,
+                "returned": entries_json.len(),
+                "limit": limit,
+                "offset": offset,
+            },
+            "filters": {
+                "severity": severity_filter,
+                "service": service_filter,
+                "since": query_params.get("since").cloned(),
+                "until": query_params.get("until").cloned(),
+            }
+        });
+
+        // Build original URI with query params for accurate response
+        let mut uri = format!("logpilot://session/{}/entries", session_name);
+        if !query_params.is_empty() {
+            let query = query_params
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join("&");
+            uri.push('?');
+            uri.push_str(&query);
+        }
+
         ResourceContent {
-            uri: format!("logpilot://session/{}/entries", session_name),
+            uri,
             mime_type: Some("application/json".to_string()),
-            text: serde_json::to_string(&entries_json).unwrap_or_default(),
+            text: result.to_string(),
         }
     }
 
