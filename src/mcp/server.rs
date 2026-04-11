@@ -253,18 +253,30 @@ impl McpServer {
                 }
             }
             "stats" => {
+                // Validate required session argument
                 let session = params
                     .arguments
                     .as_ref()
                     .and_then(|a| a.get("session"))
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("");
+                    .and_then(|s| s.as_str());
+
+                let session = match session {
+                    Some(s) if !s.is_empty() => s,
+                    _ => {
+                        return JsonRpcResponse::error(
+                            id,
+                            JsonRpcError::invalid_params(
+                                "Missing required argument: 'session' is required and must be non-empty"
+                            ),
+                        );
+                    }
+                };
 
                 let (stats, is_error) = match self.get_session_stats(session).await {
-                    Ok(s) => (s, false),
+                    Ok(s) => (s, None),
                     Err(e) => (
                         format!("Error getting stats for '{}': {}", session, e),
-                        true,
+                        Some(true),
                     ),
                 };
 
@@ -273,7 +285,7 @@ impl McpServer {
                         content_type: "text".to_string(),
                         text: stats,
                     }],
-                    is_error: Some(is_error),
+                    is_error,
                 }
             }
             _ => {
