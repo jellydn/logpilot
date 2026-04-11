@@ -16,6 +16,8 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # MCP protocol tests require pre-built release binary
+      - run: cargo build --release
       - run: cargo test --all-features
 
   fmt:
