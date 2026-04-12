@@ -139,13 +139,22 @@ async fn test_mcp_resource_read_session_entries() {
         "mime type should be application/json"
     );
 
-    // The JSON body should contain both log messages
+    // Parse JSON and assert on structured fields rather than raw text
+    let entries_json: serde_json::Value =
+        serde_json::from_str(&content.text).expect("entries payload should be valid JSON");
+    let entries = entries_json["entries"]
+        .as_array()
+        .expect("entries should be an array");
     assert!(
-        content.text.contains("disk full"),
+        entries
+            .iter()
+            .any(|e| e["raw_content"] == "ERROR: disk full"),
         "entries resource should contain the error message"
     );
     assert!(
-        content.text.contains("heartbeat ok"),
+        entries
+            .iter()
+            .any(|e| e["raw_content"] == "INFO: heartbeat ok"),
         "entries resource should contain the info message"
     );
 }
@@ -181,13 +190,17 @@ async fn test_mcp_resource_read_session_summary() {
         now,
     );
 
-    // The summary JSON should name the session and report 3 total entries
-    assert!(
-        summary.text.contains(session),
+    // Parse the JSON payload and assert on structured fields
+    let summary_json: serde_json::Value =
+        serde_json::from_str(&summary.text).expect("summary payload should be valid JSON");
+    assert_eq!(
+        summary_json["session_name"].as_str(),
+        Some(session),
         "summary should contain session name"
     );
-    assert!(
-        summary.text.contains("\"total_entries\":3"),
+    assert_eq!(
+        summary_json["total_entries"].as_u64(),
+        Some(3),
         "summary should report total_entries: 3, got: {}",
         summary.text
     );
