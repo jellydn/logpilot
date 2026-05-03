@@ -74,7 +74,10 @@ async fn test_buffer_only_persists_error_and_fatal() {
     ];
 
     for entry in entries {
-        manager.add_entry(entry).await.expect("add_entry should succeed");
+        manager
+            .add_entry(entry)
+            .await
+            .expect("add_entry should succeed");
     }
 
     // All six entries should be in the ring buffer
@@ -96,7 +99,9 @@ async fn test_buffer_only_persists_error_and_fatal() {
         persisted.iter().map(|e| &e.severity).collect::<Vec<_>>()
     );
     assert!(
-        persisted.iter().all(|e| e.severity == Severity::Error || e.severity == Severity::Fatal),
+        persisted
+            .iter()
+            .all(|e| e.severity == Severity::Error || e.severity == Severity::Fatal),
         "persisted entries must be ERROR or FATAL"
     );
 }
@@ -123,10 +128,12 @@ async fn test_mcp_resource_read_session_entries() {
     store.add_entry(session, info_entry.clone()).await;
 
     // Retrieve session data and build the MCP resource content
-    let data = store.get_session(session).await.expect("session should exist");
+    let data = store
+        .get_session(session)
+        .await
+        .expect("session should exist");
 
-    let content =
-        ResourceHandler::build_entries(session, &data.entries, &HashMap::new());
+    let content = ResourceHandler::build_entries(session, &data.entries, &HashMap::new());
 
     // The response URI should reference the session
     assert!(
@@ -169,16 +176,28 @@ async fn test_mcp_resource_read_session_summary() {
 
     let pane_id = Uuid::new_v4();
     store
-        .add_entry(session, make_entry_with_severity(pane_id, 1, "ERROR: boom", Severity::Error))
+        .add_entry(
+            session,
+            make_entry_with_severity(pane_id, 1, "ERROR: boom", Severity::Error),
+        )
         .await;
     store
-        .add_entry(session, make_entry_with_severity(pane_id, 2, "INFO: ok", Severity::Info))
+        .add_entry(
+            session,
+            make_entry_with_severity(pane_id, 2, "INFO: ok", Severity::Info),
+        )
         .await;
     store
-        .add_entry(session, make_entry_with_severity(pane_id, 3, "FATAL: crash", Severity::Fatal))
+        .add_entry(
+            session,
+            make_entry_with_severity(pane_id, 3, "FATAL: crash", Severity::Fatal),
+        )
         .await;
 
-    let data = store.get_session(session).await.expect("session should exist");
+    let data = store
+        .get_session(session)
+        .await
+        .expect("session should exist");
     let now = Utc::now();
     let summary = ResourceHandler::build_summary(
         session,
@@ -217,8 +236,16 @@ async fn test_dedup_pipeline_identifies_duplicates() {
     let mut dedup = Deduplicator::new();
     let pane_id = Uuid::new_v4();
 
-    let first = make_entry(pane_id, 1, "ERROR: connection refused to db at localhost:5432");
-    let second = make_entry(pane_id, 2, "ERROR: connection refused to db at localhost:5432");
+    let first = make_entry(
+        pane_id,
+        1,
+        "ERROR: connection refused to db at localhost:5432",
+    );
+    let second = make_entry(
+        pane_id,
+        2,
+        "ERROR: connection refused to db at localhost:5432",
+    );
 
     // The first entry should not be a duplicate
     assert!(
@@ -280,7 +307,8 @@ async fn test_dedup_pipeline_similar_stack_traces() {
 /// returns exactly the entries matching each queried severity.
 #[tokio::test]
 async fn test_severity_ordering_get_by_severity() {
-    let manager = BufferManager::new_in_memory(/*capacity=*/ 500, /*retention_minutes=*/ 60);
+    let manager =
+        BufferManager::new_in_memory(/*capacity=*/ 500, /*retention_minutes=*/ 60);
     let pane_id = Uuid::new_v4();
     manager.create_buffer(pane_id).await;
 
@@ -294,7 +322,10 @@ async fn test_severity_ordering_get_by_severity() {
     ];
 
     for e in entries {
-        manager.add_entry(e).await.expect("add_entry should succeed");
+        manager
+            .add_entry(e)
+            .await
+            .expect("add_entry should succeed");
     }
 
     // Each severity query must return exactly one entry
@@ -372,7 +403,10 @@ async fn test_pipeline_parse_then_ingest() {
     for (seq, line) in raw_lines.iter().enumerate() {
         let mut entry = make_entry(pane_id, seq as u64 + 1, line);
         parser.parse(&mut entry);
-        manager.add_entry(entry).await.expect("add_entry should succeed");
+        manager
+            .add_entry(entry)
+            .await
+            .expect("add_entry should succeed");
     }
 
     // Total entries in ring buffer
