@@ -51,14 +51,16 @@ fn make_entry_with_severity(pane_id: Uuid, seq: u64, content: &str, sev: Severit
 /// and verify that only ERROR / FATAL entries are written to SQLite.
 #[tokio::test]
 async fn test_buffer_only_persists_error_and_fatal() {
+    // Use a shared in-memory database URI to ensure all connections see the same data
+    // (SQLite :memory: creates a separate database per connection, which breaks with pooling)
     let manager = BufferManager::with_persistence(
-        ":memory:",
+        "file:test_buffer_only_persists_error_and_fatal?mode=memory&cache=shared",
         /*capacity=*/ 1000,
         /*retention_minutes=*/ 60,
         /*persist_severity=*/ Severity::Error,
     )
     .await
-    .expect("should create in-memory persistence store");
+    .expect("should create shared in-memory persistence store");
 
     let pane_id = Uuid::new_v4();
     manager.create_buffer(pane_id).await;
