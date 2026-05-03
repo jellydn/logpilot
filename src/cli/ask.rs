@@ -198,7 +198,7 @@ async fn capture_from_tmux(
     }
 
     // Sort by timestamp (most recent first) and filter by time window
-    entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    entries.sort_by_key(|b| std::cmp::Reverse(b.timestamp));
     entries.retain(|e| e.timestamp >= *window_start);
 
     Ok(entries)
