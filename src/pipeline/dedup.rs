@@ -3,6 +3,7 @@
 use crate::models::LogEntry;
 use once_cell::sync::Lazy;
 use std::collections::{HashMap, VecDeque};
+use std::time::{Duration, Instant};
 
 // Static compiled regex patterns for performance
 static TIMESTAMP_RE: Lazy<regex::Regex> = Lazy::new(|| {
@@ -22,24 +23,35 @@ static HEXADDR_RE: Lazy<regex::Regex> =
     Lazy::new(|| regex::Regex::new(r"0x[0-9a-fA-F]+").expect("Invalid hex address regex"));
 
 const MAX_DEDUP_SIGNATURES: usize = 100_000;
+/// Default dedup window: entries older than this are stale and evicted
+const DEFAULT_DEDUP_WINDOW: Duration = Duration::from_secs(3600); // 1 hour
 
 /// SimHash-based deduplicator for fuzzy matching of log entries
 pub struct Deduplicator {
     /// Store hashes of seen entries (signature -> simhash)
     /// Limited to MAX_DEDUP_SIGNATURES to prevent unbounded growth
     signatures: HashMap<String, u64>,
+    /// Track when each signature was last seen for TTL eviction
+    seen_at: HashMap<String, Instant>,
     /// Threshold for considering two entries similar (Hamming distance)
     similarity_threshold: u32,
     /// FIFO queue for eviction (oldest entries at front)
     insertion_queue: VecDeque<String>,
+    /// Dedup window — entries unseen longer than this are evicted
+    window: Duration,
+    /// Counter for periodic eviction sweeps
+    insertion_count: usize,
 }
 
 impl Deduplicator {
     pub fn new() -> Self {
         Self {
             signatures: HashMap::with_capacity(MAX_DEDUP_SIGNATURES),
+            seen_at: HashMap::with_capacity(MAX_DEDUP_SIGNATURES),
             similarity_threshold: 3, // Allow up to 3 bits difference
             insertion_queue: VecDeque::with_capacity(MAX_DEDUP_SIGNATURES),
+            window: DEFAULT_DEDUP_WINDOW,
+            insertion_count: 0,
         }
     }
 
@@ -53,9 +65,34 @@ impl Deduplicator {
                 if let Some(key) = self.insertion_queue.pop_front() {
                     // Only remove from signatures if key matches (handles duplicates in queue)
                     self.signatures.remove(&key);
+                    self.seen_at.remove(&key);
                 }
             }
         }
+    }
+
+    /// Evict entries older than the dedup window (TTL-based sweep).
+    /// Called periodically (every N insertions or when map exceeds threshold).
+    fn evict_stale(&mut self) {
+        let cutoff = Instant::now() - self.window;
+        // Collect keys to avoid borrowing issues with retain
+        let stale_keys: Vec<String> = self
+            .seen_at
+            .iter()
+            .filter(|(_, seen_at)| **seen_at < cutoff)
+            .map(|(k, _)| k.clone())
+            .collect();
+
+        if stale_keys.is_empty() {
+            return;
+        }
+
+        for key in stale_keys {
+            self.signatures.remove(&key);
+            self.seen_at.remove(&key);
+        }
+        // Also clean the FIFO queue (best-effort — full compaction deferred)
+        self.insertion_queue.retain(|k| self.signatures.contains_key(k));
     }
 
     /// Compute SimHash for a string
@@ -146,12 +183,19 @@ impl Deduplicator {
 
     /// Add an entry to the deduplication index
     pub fn add_signature(&mut self, entry: &LogEntry, signature: String) {
+        // Periodic TTL sweep — every 10k insertions or at size threshold
+        self.insertion_count += 1;
+        if self.insertion_count % 10_000 == 0 || self.signatures.len() > MAX_DEDUP_SIGNATURES / 2 {
+            self.evict_stale();
+        }
+
         // Evict old entries if at capacity
         self.evict_if_needed();
 
         let normalized = Self::normalize_content(&entry.raw_content);
         let hash = Self::compute_simhash(&normalized);
         self.signatures.insert(signature.clone(), hash);
+        self.seen_at.insert(signature.clone(), Instant::now());
         self.insertion_queue.push_back(signature);
     }
 
