@@ -92,7 +92,8 @@ impl Deduplicator {
             self.seen_at.remove(&key);
         }
         // Also clean the FIFO queue (best-effort — full compaction deferred)
-        self.insertion_queue.retain(|k| self.signatures.contains_key(k));
+        self.insertion_queue
+            .retain(|k| self.signatures.contains_key(k));
     }
 
     /// Compute SimHash for a string
@@ -347,7 +348,9 @@ mod tests {
             assert!(
                 dist > 3,
                 "completely different texts should not match (got distance {}):\n  '{}'\n  '{}'",
-                dist, a, b
+                dist,
+                a,
+                b
             );
         }
     }
@@ -404,7 +407,9 @@ mod tests {
         assert!(
             d13 <= d12 + d23,
             "triangle inequality violated: d13={}, d12={}, d23={}",
-            d13, d12, d23
+            d13,
+            d12,
+            d23
         );
     }
 
@@ -468,8 +473,10 @@ mod tests {
         assert_eq!(dedup.signature_count(), 1);
 
         // Manually age out the entry in seen_at
-        dedup.seen_at
-            .insert("sig-1".to_string(), Instant::now() - Duration::from_secs(3601));
+        dedup.seen_at.insert(
+            "sig-1".to_string(),
+            Instant::now() - Duration::from_secs(3601),
+        );
 
         // Force a TTL sweep
         dedup.evict_stale();
