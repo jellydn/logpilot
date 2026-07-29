@@ -165,7 +165,7 @@ async fn generate_summary_from_store(
 
     let services_affected: Vec<String> = {
         let mut svcs: Vec<_> = services.into_iter().collect();
-        svcs.sort_by(|a, b| b.1.cmp(&a.1));
+        svcs.sort_by_key(|b| std::cmp::Reverse(b.1));
         svcs.into_iter().map(|(s, _)| s).collect()
     };
 
@@ -273,7 +273,7 @@ fn print_text_summary(summary: &Summary, max_tokens: usize) -> anyhow::Result<()
     if !summary.entries_by_severity.is_empty() {
         output.push_str("Severity Distribution:\n");
         let mut severities: Vec<_> = summary.entries_by_severity.iter().collect();
-        severities.sort_by(|a, b| b.1.cmp(a.1)); // Sort by count descending
+        severities.sort_by_key(|b| std::cmp::Reverse(*b.1)); // Sort by count descending
 
         for (sev, count) in severities {
             output.push_str(&format!("  {}: {}\n", sev, count));
