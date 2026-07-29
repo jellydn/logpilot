@@ -299,4 +299,202 @@ mod tests {
         let duplicate = dedup.find_duplicate(&entry2);
         assert!(duplicate.is_some(), "Similar entries should match");
     }
+
+    // ── Property-based tests ───────────────────────────────────────────
+
+    /// Property: identical strings always produce the same hash
+    #[test]
+    fn test_identical_strings_same_hash() {
+        for text in [
+            "ERROR: Connection refused",
+            "INFO: Server started on port 8080",
+            "WARN: Disk usage at 85% on /dev/sda1",
+            "",
+            "x",
+        ] {
+            let h1 = Deduplicator::compute_simhash(text);
+            let h2 = Deduplicator::compute_simhash(text);
+            assert_eq!(
+                h1, h2,
+                "identical input '{}' produced different hashes",
+                text
+            );
+            assert_eq!(
+                Deduplicator::hamming_distance(h1, h2),
+                0,
+                "distance should be 0 for identical hash"
+            );
+        }
+    }
+
+    /// Property: completely different strings have distinct hashes
+    #[test]
+    fn test_completely_different_strings_distinct() {
+        let pairs = [
+            ("ERROR: Database timeout", "INFO: User login successful"),
+            ("FATAL: Out of memory", "DEBUG: Cache hit ratio 0.95"),
+            ("WARN: Retry attempt 3/5", "TRACE: Entering function foo()"),
+            (
+                "ERROR: NullPointerException at line 42",
+                "Starting warmup phase for node-7",
+            ),
+        ];
+
+        for (a, b) in pairs {
+            let h1 = Deduplicator::compute_simhash(a);
+            let h2 = Deduplicator::compute_simhash(b);
+            let dist = Deduplicator::hamming_distance(h1, h2);
+            assert!(
+                dist > 3,
+                "completely different texts should not match (got distance {}):\n  '{}'\n  '{}'",
+                dist, a, b
+            );
+        }
+    }
+
+    /// Property: strings differing by one word should be similar
+    #[test]
+    fn test_single_word_difference_similar() {
+        let template = "ERROR: Connection to database {} failed after 5000ms";
+        let text1 = template.replace("{}", "users");
+        let text2 = template.replace("{}", "orders");
+
+        let h1 = Deduplicator::compute_simhash(&text1);
+        let h2 = Deduplicator::compute_simhash(&text2);
+        let dist = Deduplicator::hamming_distance(h1, h2);
+
+        assert!(
+            dist <= 10,
+            "texts differing by one word should be similar (got distance {})",
+            dist
+        );
+    }
+
+    /// Property: SimHash distance is symmetric
+    #[test]
+    fn test_hamming_distance_symmetric() {
+        let text_a = "ERROR: Service health check failed";
+        let text_b = "INFO: Service health check passed";
+
+        let ha = Deduplicator::compute_simhash(text_a);
+        let hb = Deduplicator::compute_simhash(text_b);
+
+        assert_eq!(
+            Deduplicator::hamming_distance(ha, hb),
+            Deduplicator::hamming_distance(hb, ha),
+            "Hamming distance should be symmetric"
+        );
+    }
+
+    /// Property: SimHash distance satisfies triangle inequality
+    #[test]
+    fn test_hamming_distance_triangle_inequality() {
+        let t1 = "ERROR: foo failed";
+        let t2 = "ERROR: bar failed";
+        let t3 = "INFO: baz started";
+
+        let h1 = Deduplicator::compute_simhash(t1);
+        let h2 = Deduplicator::compute_simhash(t2);
+        let h3 = Deduplicator::compute_simhash(t3);
+
+        let d12 = Deduplicator::hamming_distance(h1, h2);
+        let d23 = Deduplicator::hamming_distance(h2, h3);
+        let d13 = Deduplicator::hamming_distance(h1, h3);
+
+        assert!(
+            d13 <= d12 + d23,
+            "triangle inequality violated: d13={}, d12={}, d23={}",
+            d13, d12, d23
+        );
+    }
+
+    /// Property: normalizing then hashing is consistent with
+    /// normalizing during deduplication
+    #[test]
+    fn test_normalization_is_idempotent() {
+        let content = "2024-01-15T10:30:00Z User 1234abcd failed login at File.java:45";
+
+        let once = Deduplicator::normalize_content_static(content);
+        let twice = Deduplicator::normalize_content_static(&once);
+
+        assert_eq!(
+            once, twice,
+            "normalize_content should be idempotent (no double-replacement)"
+        );
+    }
+
+    /// Property: normalization handles UUIDs (static mode doesn't handle hex addresses)
+    #[test]
+    fn test_normalize_uuid_and_hex() {
+        // normalize_content_static replaces timestamps, line numbers, and UUIDs
+        // but not hex addresses (that's in normalize_content only)
+        let content = "ERROR [550e8400-e29b-41d4-a716-446655440000] at 0x7fff5fbff7d0";
+
+        let normalized = Deduplicator::normalize_content_static(content);
+
+        assert!(
+            !normalized.contains("550e8400"),
+            "UUID should be replaced: {}",
+            normalized
+        );
+        assert!(normalized.contains("[UUID]"));
+        // Hex addresses are NOT replaced in the static version (only in the full version)
+        assert!(
+            normalized.contains("0x7fff"),
+            "hex address is preserved in static normalize"
+        );
+
+        // normalize_content (instance method) handles hex addresses
+        assert!(
+            HEXADDR_RE.is_match(content),
+            "content should match hex address pattern"
+        );
+    }
+
+    /// Property: TTL eviction removes entries older than the dedup window
+    #[test]
+    fn test_ttl_eviction() {
+        let mut dedup = Deduplicator::new();
+
+        // Add an entry
+        let entry = LogEntry::new(
+            uuid::Uuid::new_v4(),
+            1,
+            chrono::Utc::now(),
+            "ERROR: test".to_string(),
+        );
+        dedup.add_signature(&entry, "sig-1".to_string());
+
+        assert_eq!(dedup.signature_count(), 1);
+
+        // Manually age out the entry in seen_at
+        dedup.seen_at
+            .insert("sig-1".to_string(), Instant::now() - Duration::from_secs(3601));
+
+        // Force a TTL sweep
+        dedup.evict_stale();
+
+        assert_eq!(
+            dedup.signature_count(),
+            0,
+            "stale entries should be evicted after dedup window"
+        );
+    }
+
+    /// Property: empty content produces a valid hash
+    #[test]
+    fn test_empty_content_hash() {
+        let hash = Deduplicator::compute_simhash("");
+        // Empty string should produce hash 0 (all bits 0)
+        assert_eq!(hash, 0, "empty content should produce zero simhash");
+    }
+
+    /// Property: single word is consistent
+    #[test]
+    fn test_single_word_consistency() {
+        let word = "ERROR";
+        let h1 = Deduplicator::compute_simhash(word);
+        let h2 = Deduplicator::compute_simhash(word);
+        assert_eq!(h1, h2);
+    }
 }
