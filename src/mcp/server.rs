@@ -452,6 +452,15 @@ impl McpServer {
     pub async fn run_stdio(&self) -> io::Result<()> {
         info!("MCP server starting on stdio");
 
+        // Spawn periodic stale session cleanup (every 5 minutes)
+        let data_store = self.data_store.clone();
+        let cleanup_handle = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                data_store.cleanup_stale_sessions().await;
+            }
+        });
+
         let stdin = io::stdin();
         let stdout = io::stdout();
         let mut stdout_lock = stdout.lock();
@@ -487,6 +496,7 @@ impl McpServer {
         }
 
         info!("MCP server shutting down");
+        cleanup_handle.abort();
         Ok(())
     }
 
