@@ -10,7 +10,6 @@ pub mod pipeline;
 
 pub use analyzer::Analyzer;
 pub use error::{LogPilotError, Result};
-
 pub use pipeline::Pipeline;
 
 use serde::{Deserialize, Serialize};
@@ -40,9 +39,13 @@ pub struct PatternConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlertConfig {
+    #[serde(default = "default_recurring_error_window")]
     pub recurring_error_window_seconds: u64,
+    #[serde(default = "default_recurring_error_threshold")]
     pub recurring_error_threshold: u32,
+    #[serde(default = "default_restart_loop_window")]
     pub restart_loop_window_seconds: u64,
+    #[serde(default = "default_error_rate_threshold")]
     pub error_rate_threshold_per_minute: u32,
 }
 
@@ -50,6 +53,30 @@ pub struct AlertConfig {
 pub struct McpConfig {
     pub enabled: bool,
     pub transport: String,
+}
+
+fn default_recurring_error_window() -> u64 {
+    60
+}
+fn default_recurring_error_threshold() -> u32 {
+    5
+}
+fn default_restart_loop_window() -> u64 {
+    30
+}
+fn default_error_rate_threshold() -> u32 {
+    10
+}
+
+impl Default for AlertConfig {
+    fn default() -> Self {
+        Self {
+            recurring_error_window_seconds: default_recurring_error_window(),
+            recurring_error_threshold: default_recurring_error_threshold(),
+            restart_loop_window_seconds: default_restart_loop_window(),
+            error_rate_threshold_per_minute: default_error_rate_threshold(),
+        }
+    }
 }
 
 impl Default for Config {
@@ -68,12 +95,7 @@ impl Default for Config {
             patterns: PatternConfig {
                 custom_patterns: Vec::new(),
             },
-            alerts: AlertConfig {
-                recurring_error_window_seconds: 60,
-                recurring_error_threshold: 5,
-                restart_loop_window_seconds: 30,
-                error_rate_threshold_per_minute: 10,
-            },
+            alerts: AlertConfig::default(),
             mcp: McpConfig {
                 enabled: true,
                 transport: "stdio".to_string(),

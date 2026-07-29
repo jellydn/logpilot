@@ -19,13 +19,21 @@ pub struct AlertEvaluator {
 
 impl AlertEvaluator {
     pub fn new() -> (Self, broadcast::Receiver<Alert>) {
+        Self::with_thresholds(10.0, 5)
+    }
+
+    /// Create with custom alert thresholds (from config.toml alerts section)
+    pub fn with_thresholds(
+        error_rate_threshold: f64,
+        recurring_error_threshold: u32,
+    ) -> (Self, broadcast::Receiver<Alert>) {
         let (alert_tx, alert_rx) = broadcast::channel(100);
 
         let evaluator = Self {
             alerts: DashMap::new(),
             alert_tx: Arc::new(alert_tx),
-            error_rate_threshold: 10.0, // 10 errors/min
-            recurring_error_threshold: 5,
+            error_rate_threshold,
+            recurring_error_threshold,
         };
 
         (evaluator, alert_rx)
