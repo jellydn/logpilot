@@ -134,7 +134,8 @@ impl PersistenceStore {
 
         query.push_str(" ORDER BY timestamp DESC");
 
-        let mut sql_query = sqlx::query_as::<_, LogEntryRow>(&query)
+        use sqlx::AssertSqlSafe;
+        let mut sql_query = sqlx::query_as::<_, LogEntryRow>(AssertSqlSafe(query.as_str()))
             .bind(since.to_rfc3339())
             .bind(until.to_rfc3339());
 

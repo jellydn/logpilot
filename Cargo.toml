@@ -37,7 +37,7 @@ regex = "1.11"
 dashmap = "6.1"
 
 # Database
-sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite"] }
+sqlx = { version = "0.9", features = ["sqlite", "runtime-tokio"] }
 
 # Utilities
 uuid = { version = "1.16", features = ["v4", "serde"] }
