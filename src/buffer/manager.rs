@@ -55,13 +55,12 @@ impl BufferManager {
         })
     }
 
-    /// Create buffer for a pane
+    /// Create buffer for a pane (idempotent — no-op if buffer already exists)
     pub async fn create_buffer(&self, pane_id: Uuid) {
         let mut buffers = self.buffers.write().await;
-        buffers.insert(
-            pane_id,
-            RingBuffer::new(self.capacity, self.retention_minutes),
-        );
+        buffers
+            .entry(pane_id)
+            .or_insert_with(|| RingBuffer::new(self.capacity, self.retention_minutes));
     }
 
     /// Remove buffer for a pane
