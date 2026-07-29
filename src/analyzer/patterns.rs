@@ -180,6 +180,7 @@ pub struct RestartLoopDetector {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 enum ServiceState {
     Unknown,
     Starting { since: Instant },

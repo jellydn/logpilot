@@ -1,4 +1,9 @@
 //! Anomaly detection and pattern analysis
+//!
+//! Many public types here are wired from summarize/watch commands;
+//! the remainder are planned API surface not yet plumbed.
+
+#![allow(dead_code)]
 
 pub mod alerts;
 pub mod incidents;

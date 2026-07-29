@@ -13,7 +13,8 @@ pub struct IncidentDetector {
     pattern_to_incident: DashMap<String, Uuid>,
     /// Minimum entries to create incident without pattern
     min_unpatterned_errors: u32,
-    /// Spike threshold for auto-creation (unused but planned)
+    /// Spike threshold for auto-creation (planned)
+    #[allow(dead_code)]
     spike_threshold: u32,
 }
 
