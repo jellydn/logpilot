@@ -2,6 +2,8 @@
 //!
 //! Usage: logpilot summarize --last 10m
 
+use crate::mcp::data_store::{get_or_init_global_store, SessionDataStore};
+use crate::models::{AlertStatus, IncidentStatus};
 use chrono::{DateTime, Duration, Utc};
 use clap::Args;
 use std::collections::HashMap;
@@ -32,18 +34,23 @@ pub async fn handle(args: SummarizeArgs) -> anyhow::Result<()> {
     let duration = parse_duration(&args.last)?;
     let window_start = Utc::now() - duration;
 
-    println!("Generating summary for last {}...", args.last);
-    println!(
-        "Window: {} to {}",
-        window_start.format("%Y-%m-%d %H:%M:%S UTC"),
-        Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
-    );
-    println!();
-    println!("Note: Full summarize integration requires active watch session.");
-    println!("Run 'logpilot watch <session-name>' to start capturing logs.");
+    // Try to read live data from the global data store (populated by watch command)
+    let store = get_or_init_global_store();
+    let sessions = store.list_sessions();
 
-    // Placeholder summary
-    let summary = generate_summary_placeholder(window_start, args.errors_only).await?;
+    if sessions.is_empty() {
+        println!("No active watch sessions found.");
+        println!("Run 'logpilot watch <session-name>' to start capturing logs.");
+        println!();
+        println!("Generating placeholder summary for last {}...", args.last);
+    }
+
+    // Generate summary from the first available session, or use placeholder
+    let summary = if let Some(session_name) = sessions.first() {
+        generate_summary_from_store(&store, session_name, window_start).await?
+    } else {
+        generate_summary_placeholder(window_start, args.errors_only).await?
+    };
 
     // Format output
     match args.format.as_str() {
@@ -124,6 +131,103 @@ pub struct AlertSummary {
     pub message: String,
     pub status: String,
     pub triggered_at: String,
+}
+
+/// Generate summary from the live data store
+async fn generate_summary_from_store(
+    store: &SessionDataStore,
+    session_name: &str,
+    window_start: DateTime<Utc>,
+) -> anyhow::Result<Summary> {
+    let session = store
+        .get_session(session_name)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("Session '{}' not found in data store", session_name))?;
+
+    // Filter entries within time window
+    let window_entries: Vec<_> = session
+        .entries
+        .iter()
+        .filter(|e| e.timestamp >= window_start)
+        .collect();
+
+    // Severity distribution
+    let mut entries_by_severity = HashMap::new();
+    let mut services = HashMap::new();
+    for entry in &window_entries {
+        *entries_by_severity
+            .entry(format!("{:?}", entry.severity))
+            .or_insert(0) += 1;
+        if let Some(ref svc) = entry.service {
+            *services.entry(svc.clone()).or_insert(0) += 1;
+        }
+    }
+
+    let services_affected: Vec<String> = {
+        let mut svcs: Vec<_> = services.into_iter().collect();
+        svcs.sort_by(|a, b| b.1.cmp(&a.1));
+        svcs.into_iter().map(|(s, _)| s).collect()
+    };
+
+    // Patterns from data store
+    let top_patterns: Vec<PatternSummary> = session
+        .patterns
+        .iter()
+        .take(10)
+        .map(|p| PatternSummary {
+            id: p.id.to_string(),
+            signature: p.signature.clone(),
+            severity: format!("{:?}", p.severity),
+            occurrence_count: p.occurrence_count,
+            window_count: p.window_count,
+            sample_message: p
+                .sample_entry
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "(no sample)".to_string()),
+        })
+        .collect();
+
+    // Incidents from data store
+    let active_incidents: Vec<IncidentSummary> = session
+        .incidents
+        .iter()
+        .filter(|i| i.status == IncidentStatus::Active)
+        .map(|i| IncidentSummary {
+            id: i.id.to_string(),
+            title: i.title.clone(),
+            severity: format!("{:?}", i.severity),
+            status: format!("{:?}", i.status),
+            started_at: i.started_at.to_rfc3339(),
+            affected_services: i.affected_services.clone(),
+        })
+        .collect();
+
+    // Alerts from data store
+    let active_alerts: Vec<AlertSummary> = session
+        .alerts
+        .iter()
+        .filter(|a| a.status == AlertStatus::Active)
+        .map(|a| AlertSummary {
+            id: a.id.to_string(),
+            alert_type: format!("{:?}", a.alert_type),
+            message: a.message.clone(),
+            status: format!("{:?}", a.status),
+            triggered_at: a.triggered_at.to_rfc3339(),
+        })
+        .collect();
+
+    Ok(Summary {
+        session_name: session_name.to_string(),
+        generated_at: Utc::now(),
+        window_start,
+        window_end: Utc::now(),
+        total_entries: window_entries.len(),
+        entries_by_severity,
+        active_incidents,
+        top_patterns,
+        active_alerts,
+        services_affected,
+    })
 }
 
 /// Generate placeholder summary

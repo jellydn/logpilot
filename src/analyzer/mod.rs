@@ -1,5 +1,4 @@
 //! Anomaly detection and pattern analysis
-#![allow(dead_code)] // Infrastructure not yet wired to CLI
 
 pub mod alerts;
 pub mod incidents;
