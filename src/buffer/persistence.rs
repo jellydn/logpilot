@@ -7,6 +7,7 @@ use crate::models::{LogEntry, Severity};
 use chrono::{DateTime, Utc};
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Row, Sqlite};
 use std::collections::HashMap;
+use std::path::Path;
 use uuid::Uuid;
 
 /// SQLite persistence for high-severity logs
@@ -17,6 +18,19 @@ pub struct PersistenceStore {
 impl PersistenceStore {
     /// Create a new persistence store
     pub async fn new(db_path: &str) -> Result<Self> {
+        // Ensure parent directory exists before opening the pool.
+        // On first run, ~/.local/share/logpilot/ may not exist yet.
+        let db_path_buf = Path::new(db_path);
+        if let Some(db_dir) = db_path_buf.parent() {
+            std::fs::create_dir_all(db_dir).map_err(|e| {
+                LogPilotError::config(format!(
+                    "cannot create data directory {}: {}",
+                    db_dir.display(),
+                    e
+                ))
+            })?;
+        }
+
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
             .connect(&format!("sqlite:{}", db_path))
