@@ -264,8 +264,7 @@ mod tests {
     #[test]
     fn test_jsonrpc_request_serialization() {
         let request = JsonRpcRequest::new("initialize", None);
-        let json = serde_json::to_string(&request)
-            .expect("should serialize JsonRpcRequest");
+        let json = serde_json::to_string(&request).expect("should serialize JsonRpcRequest");
         assert!(json.contains("\"jsonrpc\":\"2.0\""));
         assert!(json.contains("\"method\":\"initialize\""));
     }
@@ -274,8 +273,7 @@ mod tests {
     fn test_jsonrpc_response_serialization() {
         let result = serde_json::json!({ "status": "ok" });
         let response = JsonRpcResponse::success(Some(Value::from(1)), result);
-        let json = serde_json::to_string(&response)
-            .expect("should serialize JsonRpcResponse");
+        let json = serde_json::to_string(&response).expect("should serialize JsonRpcResponse");
         assert!(json.contains("\"jsonrpc\":\"2.0\""));
         assert!(json.contains("\"status\":\"ok\""));
     }
@@ -295,8 +293,7 @@ mod tests {
             description: Some("Current incident summary".to_string()),
             mime_type: Some("application/json".to_string()),
         };
-        let json = serde_json::to_string(&resource)
-            .expect("should serialize Resource");
+        let json = serde_json::to_string(&resource).expect("should serialize Resource");
         assert!(json.contains("logpilot://session/test/summary"));
     }
 
@@ -326,8 +323,8 @@ mod tests {
             method: "resources/list".to_string(),
             params: None,
         };
-        let json = serde_json::to_string(&request)
-            .expect("should serialize request with string id");
+        let json =
+            serde_json::to_string(&request).expect("should serialize request with string id");
         assert!(json.contains("\"id\":\"req-123\""));
     }
 
@@ -335,16 +332,16 @@ mod tests {
     fn test_jsonrpc_request_with_numeric_id() {
         // Standard numeric ID
         let request = JsonRpcRequest::new_with_id(42, "resources/read", None);
-        let json = serde_json::to_string(&request)
-            .expect("should serialize request with numeric id");
+        let json =
+            serde_json::to_string(&request).expect("should serialize request with numeric id");
         assert!(json.contains("\"id\":42"));
     }
 
     #[test]
     fn test_jsonrpc_request_deserialization() {
         let json = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#;
-        let request: JsonRpcRequest = serde_json::from_str(json)
-            .expect("should deserialize valid initialize request");
+        let request: JsonRpcRequest =
+            serde_json::from_str(json).expect("should deserialize valid initialize request");
         assert_eq!(request.jsonrpc, "2.0");
         assert_eq!(request.method, "initialize");
         assert!(request.params.is_some());
@@ -354,8 +351,8 @@ mod tests {
     fn test_jsonrpc_response_deserialization() {
         let json =
             r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"},"error":null}"#;
-        let response: JsonRpcResponse = serde_json::from_str(json)
-            .expect("should deserialize success response");
+        let response: JsonRpcResponse =
+            serde_json::from_str(json).expect("should deserialize success response");
         assert_eq!(response.jsonrpc, "2.0");
         assert!(response.result.is_some());
         assert!(response.error.is_none());
@@ -364,11 +361,13 @@ mod tests {
     #[test]
     fn test_jsonrpc_response_with_error() {
         let json = r#"{"jsonrpc":"2.0","id":1,"result":null,"error":{"code":-32601,"message":"Method not found","data":null}}"#;
-        let response: JsonRpcResponse = serde_json::from_str(json)
-            .expect("should deserialize error response");
+        let response: JsonRpcResponse =
+            serde_json::from_str(json).expect("should deserialize error response");
         assert!(response.result.is_none());
         assert!(response.error.is_some());
-        let err = response.error.expect("error field should be populated for error response");
+        let err = response
+            .error
+            .expect("error field should be populated for error response");
         assert_eq!(err.code, -32601);
     }
 
@@ -394,8 +393,8 @@ mod tests {
             result: Some(Value::Null),
             error: None,
         };
-        let json = serde_json::to_string(&response)
-            .expect("should serialize response with null result");
+        let json =
+            serde_json::to_string(&response).expect("should serialize response with null result");
         assert!(json.contains("\"result\":null"));
     }
 
@@ -431,8 +430,7 @@ mod tests {
                 version: "0.1.0".to_string(),
             },
         };
-        let json = serde_json::to_string(&result)
-            .expect("should serialize initialize result");
+        let json = serde_json::to_string(&result).expect("should serialize initialize result");
         assert!(json.contains("protocolVersion"));
         assert!(json.contains("2025-06-18"));
         assert!(json.contains("serverInfo"));
@@ -446,16 +444,15 @@ mod tests {
             mime_type: Some("application/json".to_string()),
             text: r#"{"total_entries":100}"#.to_string(),
         };
-        let json = serde_json::to_string(&content)
-            .expect("should serialize resource content");
+        let json = serde_json::to_string(&content).expect("should serialize resource content");
         assert!(json.contains("\"text\":\"{\\\"total_entries\\\":100}\""));
     }
 
     #[test]
     fn test_resources_read_params_deserialization() {
         let json = r#"{"uri":"logpilot://session/test/summary"}"#;
-        let params: ResourcesReadParams = serde_json::from_str(json)
-            .expect("should deserialize resources/read params");
+        let params: ResourcesReadParams =
+            serde_json::from_str(json).expect("should deserialize resources/read params");
         assert_eq!(params.uri, "logpilot://session/test/summary");
     }
 
@@ -469,8 +466,7 @@ mod tests {
                 mime_type: None,
             }],
         };
-        let json = serde_json::to_string(&result)
-            .expect("should serialize resources list result");
+        let json = serde_json::to_string(&result).expect("should serialize resources list result");
         assert!(json.contains("resources"));
     }
 }

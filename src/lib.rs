@@ -55,10 +55,18 @@ pub struct McpConfig {
     pub transport: String,
 }
 
-fn default_recurring_error_window() -> u64 { 60 }
-fn default_recurring_error_threshold() -> u32 { 5 }
-fn default_restart_loop_window() -> u64 { 30 }
-fn default_error_rate_threshold() -> u32 { 10 }
+fn default_recurring_error_window() -> u64 {
+    60
+}
+fn default_recurring_error_threshold() -> u32 {
+    5
+}
+fn default_restart_loop_window() -> u64 {
+    30
+}
+fn default_error_rate_threshold() -> u32 {
+    10
+}
 
 impl Default for AlertConfig {
     fn default() -> Self {

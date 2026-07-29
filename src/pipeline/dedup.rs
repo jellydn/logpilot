@@ -92,7 +92,8 @@ impl Deduplicator {
             self.seen_at.remove(&key);
         }
         // Also clean the FIFO queue (best-effort — full compaction deferred)
-        self.insertion_queue.retain(|k| self.signatures.contains_key(k));
+        self.insertion_queue
+            .retain(|k| self.signatures.contains_key(k));
     }
 
     /// Compute SimHash for a string
