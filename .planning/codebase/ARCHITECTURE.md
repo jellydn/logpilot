@@ -1,285 +1,209 @@
-# LogPilot Architecture
+# Architecture
 
-**Project**: LogPilot - AI-Native tmux Log Copilot for Support Incident Tracking
+**Analysis Date:** 2026-08-26
 
-**Version**: 0.1.0 | **Edition**: Rust 2021 | **Runtime**: Tokio (async)
+## Pattern Overview
 
-## System Design Pattern
+**Overall:** Layered async CLI pipeline with a dual crate (library + binary), tmux-backed capture, in-process analysis, and a hand-rolled MCP JSON-RPC adapter
 
-LogPilot follows a **Producer-Consumer Pipeline** architecture with real-time log analysis and AI context bridging:
+**Key Characteristics:**
+- Single Rust package (`logpilot` 0.1.3) exposing both `src/lib.rs` (integration tests, shared API) and `src/main.rs` (CLI binary that re-declares the same modules instead of depending on the library)
+- Tokio async runtime with unbounded `mpsc` channels from capture tasks into a watch-loop consumer; concurrent maps (`dashmap`) and `tokio::sync::RwLock` for session/analyzer state
+- Intended producer-consumer pipeline (`Capture -> Parser -> Deduplicator -> Cluster -> Analyzer`) is implemented as cooperating types, but the `Pipeline` orchestrator in `src/pipeline/mod.rs` is a channel stub; live `watch` wires components manually
+- Persistence is hybrid: per-pane in-memory `VecDeque` ring buffer plus SQLite (`sqlx`) for ERROR/FATAL; MCP/summarize are meant to share a process-global `SessionDataStore` (`once_cell::OnceCell`)
+- MCP is currently a custom JSON-RPC 2.0 stdio server (`src/mcp/server.rs`); official `rmcp` SDK is commented out in `Cargo.toml` and `src/mcp/mod.rs` due to Rust 1.86 compatibility
 
-```
-tmux session panes
-       ↓
-   Capture layer (SessionRepository)
-       ↓
-   Log Entry Channel (mpsc)
-       ↓
-   Analyzer (pattern detection, deduplication, clustering)
-       ↓
-   Results: Patterns, Incidents, Alerts
-       ↓
-   Shared Data Store (SessionDataStore)
-       ↓
-   ├─ CLI output (watch command)
-   ├─ MCP server (Claude Code integration)
-   └─ SQLite persistence (high-severity events)
-```
+## Layers
 
-### Core Design Principles
+**CLI / Presentation:**
+- Purpose: Parse clap subcommands, print human-readable logs/alerts, and start long-running modes (`watch`, `mcp-server`)
+- Location: `src/main.rs`, `src/cli/`
+- Contains: `Commands` enum; handlers in `src/cli/watch.rs`, `src/cli/filter.rs`, `src/cli/summarize.rs`, `src/cli/ask.rs`, `src/cli/mcp.rs`, `src/cli/status.rs`; crossterm key handling in watch
+- Depends on: capture, buffer, analyzer, models, mcp, pipeline parser (ask), tracing
+- Used by: binary entry `src/main.rs` only (not re-exported as a public library API except tests that import `logpilot::cli::filter`)
 
-- **Async-first**: Tokio-based concurrent processing
-- **Thread-safe**: DashMap, Arc<RwLock> for concurrent access
-- **Real-time analysis**: Streaming log processing without batching
-- **AI-native**: MCP protocol for Claude Code context bridge
-- **Separation of concerns**: Capture → Pipeline → Analysis → Output
+**Capture (tmux I/O):**
+- Purpose: Attach to tmux sessions/panes, stream pane output, detect disconnect/reconnect
+- Location: `src/capture/`
+- Contains: `TmuxCommand` (`src/capture/tmux.rs`) wrapping `tmux pipe-pane` / `list-sessions` / `list-panes` / `capture-pane`; `PaneCapture` FIFO reader (`src/capture/pane.rs`); `SessionManager` / `SessionRepository` (`src/capture/session.rs`)
+- Depends on: `src/models/session.rs`, `src/models/pane.rs`, `src/models/log_entry.rs`, `src/error.rs`
+- Used by: `src/cli/watch.rs` (live stream), `src/cli/filter.rs` and `src/cli/ask.rs` (session existence + pane list; they also call `tmux` directly for snapshots)
 
-## Component Layers
+**Pipeline (parse / dedup / cluster):**
+- Purpose: Turn raw pane lines into structured `LogEntry`s and cluster similar messages
+- Location: `src/pipeline/`
+- Contains: regex `LogParser` (`src/pipeline/parser.rs`); JSON/logfmt `FormatParser` (`src/pipeline/formats.rs`); SimHash `Deduplicator` (`src/pipeline/dedup.rs`); `ClusterEngine` / `ClusterManager` (`src/pipeline/cluster.rs`); stub `Pipeline` channel holder (`src/pipeline/mod.rs`)
+- Depends on: `src/models/log_entry.rs`, `src/models/severity.rs`
+- Used by: `Analyzer::process_entry` in `src/analyzer/mod.rs` (formats + parser + cluster); `src/cli/ask.rs` (`LogParser` only); integration tests in `tests/test_pipeline_integration.rs`
 
-### Layer 1: Data Models (`src/models/`)
+**Buffer (memory + SQLite):**
+- Purpose: Time/capacity-bounded in-memory storage plus durable high-severity history
+- Location: `src/buffer/`
+- Contains: `RingBuffer` (`src/buffer/ring.rs`); `PersistenceStore` (`src/buffer/persistence.rs`); `BufferManager` (`src/buffer/manager.rs`)
+- Depends on: models, `sqlx` SQLite pool, `src/error.rs`
+- Used by: `src/cli/watch.rs` (`BufferManager::with_persistence` → `~/.local/share/logpilot/logs.db` or `.logpilot/logs.db`); tests in `tests/test_pipeline_integration.rs`
 
-**Purpose**: Type-safe domain structures
+**Analyzer (anomaly / incident / alert):**
+- Purpose: Pattern frequency, incident auto-creation, and alert evaluation
+- Location: `src/analyzer/`
+- Contains: `Analyzer` orchestrator (`src/analyzer/mod.rs`); `PatternTracker` / restart-loop detector (`src/analyzer/patterns.rs`); `IncidentDetector` (`src/analyzer/incidents.rs`); `AlertEvaluator`, `AlertRepository`, `ErrorRateCalculator` (`src/analyzer/alerts.rs`)
+- Depends on: pipeline cluster/formats/parser, `src/models/{pattern,incident,alert,log_entry,severity}.rs`
+- Used by: `src/cli/watch.rs`; tests in `tests/test_alerts.rs` and `tests/integration/test_analyzer.rs`
 
-- **LogEntry**: Individual log line with metadata (severity, service, fields)
-- **Session/Pane**: tmux context (session name, pane IDs)
-- **Severity**: Enum (Unknown, Info, Warn, Error, Fatal)
-- **Pattern**: Deduplicated log signature with occurrence tracking
-- **Incident**: Multi-pattern anomaly events with status (Open/Resolved)
-- **Alert**: Alert notifications (type: ErrorRate, RecurringError, RestartLoop)
+**MCP adapter:**
+- Purpose: Expose session logs/patterns/incidents/alerts to AI hosts over stdio JSON-RPC
+- Location: `src/mcp/`
+- Contains: `McpServer` (`src/mcp/server.rs`); JSON-RPC types (`src/mcp/protocol.rs`); URI handlers (`src/mcp/resources.rs`); `SessionDataStore` (`src/mcp/data_store.rs`); unused `rmcp` implementation (`src/mcp/rmcp_server.rs`, not compiled)
+- Depends on: models, serde_json, tracing, `url` query parsing
+- Used by: `src/cli/mcp.rs`; `src/cli/summarize.rs` (global store); `src/cli/watch.rs` (local store instance); `tests/test_mcp_protocol.rs` (release binary)
 
-### Layer 2: Capture (`src/capture/`)
+**Domain models:**
+- Purpose: Shared entities matching `specs/001-tmux-log-copilot/data-model.md`
+- Location: `src/models/`
+- Contains: `LogEntry`, `Session`/`SessionStatus`, `Pane`/`PaneStatus`, `Severity`, `Pattern`, `Incident`/`IncidentStatus`, `Alert`/`AlertType`/`AlertStatus`
+- Depends on: serde, chrono, uuid
+- Used by: all other layers
 
-**Purpose**: Extract live logs from tmux panes
+**Configuration / errors / observability:**
+- Purpose: TOML config types, typed errors, dogfood metrics
+- Location: `src/lib.rs` (`Config`, `BufferConfig`, `PatternConfig`, `AlertConfig`, `McpConfig`), `src/error.rs`, `src/observability.rs`
+- Contains: `Config::load()` from `~/.config/logpilot/config.toml`; `LogPilotError`; `Metrics` counters (never imported by CLI/MCP production paths)
+- Depends on: toml, dirs, thiserror, tracing
+- Used by: library consumers/tests; CLI watch currently hardcodes buffer/alert thresholds instead of calling `Config::load()`
 
-Components:
-- **SessionRepository**: Main interface; spawns tmux capture goroutine
-- **TmuxInterop**: Executes tmux CLI commands (list-sessions, capture-pane)
-- **PaneCapture**: Per-pane capture state and sequence tracking
-- **SessionCapture**: Session-level metadata and pane registry
+## Data Flow
 
-Data Flow:
-```
-SessionRepository::new(log_tx)
-  ↓ spawns tmux subprocess
-  ↓ captures pane text via tmux capture-pane -p
-  ↓ emits LogEntry → channel
-```
+**Watch live capture (primary path):**
+1. `src/main.rs` dispatches `Commands::Watch` to `cli::watch::run` with session, optional pane, buffer minutes, min severity (`src/cli/watch.rs`).
+2. `SessionRepository::create_session` verifies the tmux session (`TmuxCommand::session_exists`) and builds a `SessionManager` (`src/capture/session.rs`).
+3. Capture starts: either `add_pane` for one target or `start_capture_all_panes` via `TmuxCommand::list_panes` (window `#I` then pane `#D`).
+4. `PaneCapture::start` creates a temp FIFO, runs `tmux pipe-pane -t <id> 'exec cat >> fifo'`, and reads lines into `LogEntry::new` sent on an unbounded `mpsc` (`src/capture/pane.rs`).
+5. The watch consumer prints entries at/above min severity, records errors in `ErrorRateCalculator`, persists via `BufferManager::add_entry` (SQLite if severity ≥ Error, always ring buffer), then `Analyzer::process_entry`.
+6. Analyzer: JSON then logfmt (`FormatParser`), regex parse (`LogParser`), SimHash cluster (`ClusterEngine`), sliding-window pattern track, optional `Incident` creation.
+7. Results are upserted into a **local** `SessionDataStore` (`src/mcp/data_store.rs`); `AlertEvaluator` checks recurring error, new exception, and error-rate; alerts print via `broadcast` and upsert.
+8. Parallel tasks: 5s connection poll (`check_connection` → Active/Stale/Disconnected), crossterm keys (`a`/`s`/`?`/`q`), Ctrl+C / quit oneshot; cleanup aborts tasks and `remove_session`.
 
-### Layer 3: Pipeline (`src/pipeline/`)
+**Filter snapshot / follow:**
+1. `cli::filter::handle` validates the session and lists panes (`src/cli/filter.rs`).
+2. Snapshot: `tmux capture-pane -p -S -1000` per pane; keyword `detect_severity` + optional regex; print matches (does not use `LogParser` or `BufferManager`).
+3. Follow: per-pane FIFO + `pipe-pane` like capture, but only severity/pattern matching on raw strings.
 
-**Purpose**: Transform raw text → structured, deduplicated logs
+**Ask prompt generation:**
+1. `cli::ask::handle` lists panes and `capture-pane` last 1000 lines (`src/cli/ask.rs`).
+2. Each line becomes a `LogEntry` parsed by `LogParser`; filtered by min severity and `--last` window (timestamp extracted from content when possible).
+3. Prints a markdown debugging prompt (up to 50 errors); does not read SQLite or `SessionDataStore`.
 
-Components:
-- **Parser**: Regex-based structured field extraction (log level, service, timestamp)
-- **FormatParser**: Attempt JSON and logfmt parsing
-- **ClusterEngine**: Hash-based deduplication; generates signatures
-- **ClusterManager**: Tracks cluster membership (logs → clusters)
-- **Deduplicator**: Prevents duplicate entry processing
+**Summarize:**
+1. `cli::summarize::handle` parses `--last` duration (`src/cli/summarize.rs`).
+2. Reads `get_or_init_global_store()`; if empty, prints a placeholder demo summary. Because `watch` constructs `SessionDataStore::new()` rather than the global singleton, live watch data is not visible to summarize/MCP in a separate process.
 
-Pipeline orchestration (in `Analyzer.process_entry()`):
-```
-1. FormatParser::try_parse_json()
-   ↓ if fails → try_parse_logfmt()
-2. LogParser::parse() - regex extraction
-3. ClusterEngine::cluster() - generate signature, detect new cluster
-4. ClusterManager::add_to_cluster() - register membership
-5. PatternTracker::track() - frequency analysis
-6. IncidentDetector::create_incident() - if threshold exceeded
-```
+**MCP JSON-RPC:**
+1. `cli::mcp::handle` constructs `McpServer::new()` and `run_stdio` (`src/mcp/server.rs`).
+2. Line-delimited JSON-RPC 2.0 on stdin; methods: `initialize` (protocol `2025-06-18`), `resources/list`, `resources/read`, `tools/list`, `tools/call` (`search`, `stats`), `ping`; notifications (no `id`) get no response.
+3. Resources: `logpilot://session/{name}/summary|entries|patterns|incidents|alerts` (`src/mcp/resources.rs`, schema in `specs/001-tmux-log-copilot/contracts/mcp-schema.json`).
+4. Data comes from the process-global `OnceCell` store (`src/mcp/data_store.rs`); a 5-minute task drops sessions idle > 60 minutes.
 
-### Layer 4: Analyzer (`src/analyzer/`)
+**State Management:**
+- Session/pane identity: UUID models plus tmux names/IDs; `SessionRepository` is an in-process `HashMap<String, Arc<SessionManager>>` (not shared across CLI invocations).
+- Logs: per-pane `RingBuffer` (default 10k / N minutes) plus SQLite `log_entries` table with indexes on timestamp, severity, pane (`src/buffer/persistence.rs`). Watch DB path: `dirs::data_dir()/logpilot/logs.db`.
+- Analysis: `Analyzer` holds `Arc<RwLock<...>>` cluster/pattern/incident state for the watch process lifetime.
+- MCP/summarize: intended global `SessionDataStore` (`DashMap<String, RwLock<SessionData>>`, last 10k entries). Watch currently does not attach to that global instance.
+- Config: `Config` in `src/lib.rs` documents `~/.config/logpilot/config.toml` (`config.example.toml`); live CLI paths do not load it; alert thresholds in watch use `AlertEvaluator::new()` defaults (10 errors/min, recurring 5).
 
-**Purpose**: Real-time anomaly detection and incident correlation
+## Key Abstractions
 
-Components:
-- **Analyzer**: Orchestrator; manages all sub-analyzers
-- **PatternTracker**: Windowed frequency counter (5-min window default)
-- **IncidentDetector**: Creates Incident when pattern exceeds threshold
-- **AlertEvaluator**: Detects error rate spikes, restart loops
-- **ErrorRateCalculator**: Per-minute error count tracker
+**LogEntry:**
+- Purpose: Canonical captured line with pane_id, sequence, timestamp, severity, optional service, raw_content, parsed_fields
+- Examples: `src/models/log_entry.rs`
+- Pattern: serde DTO + builder helpers; created at capture time with `Severity::Unknown`, enriched by parsers
 
-Key algorithms:
-- **Deduplication**: Severity + first 100 chars normalized → signature
-- **Clustering**: Track unique signatures; emit new clusters as patterns
-- **Incident detection**: Pattern count in time window > threshold → Incident
-- **Alert rules**:
-  - Recurring Error: 5+ errors in 60s window
-  - Error Rate: >10 errors/min
-  - Restart Loop: 5+ errors in 30s window
+**Analyzer:**
+- Purpose: Single-entry analysis facade combining format parse, regex parse, clustering, pattern windows, incidents
+- Examples: `src/analyzer/mod.rs`
+- Pattern: orchestrator over `Arc<RwLock<T>>` engines; returns `AnalysisResult`
 
-### Layer 5: Shared Data Store (`src/mcp/data_store.rs`)
+**BufferManager:**
+- Purpose: Per-pane ring buffers plus optional SQLite persistence gated by severity
+- Examples: `src/buffer/manager.rs`, `src/buffer/ring.rs`, `src/buffer/persistence.rs`
+- Pattern: write-through for ERROR+ (persist first, then memory); query APIs exist but watch does not query them after insert
 
-**Purpose**: Thread-safe live data access for MCP server
+**SessionManager / SessionRepository:**
+- Purpose: Lifecycle of tmux-backed capture for one or many named sessions
+- Examples: `src/capture/session.rs`, `src/capture/pane.rs`, `src/capture/tmux.rs`
+- Pattern: repository of managers; FIFO + pipe-pane workers; reconnect task on stale (5 attempts / 5s)
 
-- **SessionDataStore**: Global singleton (DashMap<session_name, SessionData>)
-- **SessionData**: Vec<LogEntry>, Vec<Pattern>, Vec<Incident>, Vec<Alert>
-- **Bounded**: Keeps last 10k log entries per session
-- **Updated**: Timestamp tracking for MCP resources/list
+**SessionDataStore:**
+- Purpose: In-memory projection of entries/patterns/incidents/alerts for MCP and summarize
+- Examples: `src/mcp/data_store.rs`
+- Pattern: concurrent map + optional process singleton (`GLOBAL_DATA_STORE`)
 
-### Layer 6: MCP Server (`src/mcp/`)
+**McpServer:**
+- Purpose: MCP-shaped JSON-RPC server without the `rmcp` crate
+- Examples: `src/mcp/server.rs`, `src/mcp/protocol.rs`, `src/mcp/resources.rs`; dormant SDK port `src/mcp/rmcp_server.rs`
+- Pattern: request dispatch + async resource/tool handlers
 
-**Purpose**: Expose live logs/incidents via Model Context Protocol to Claude Code
+**AlertEvaluator / ErrorRateCalculator:**
+- Purpose: Threshold alerts (recurring error, new exception, restart loop, error rate) with broadcast fan-out
+- Examples: `src/analyzer/alerts.rs`
+- Pattern: DashMap of active alerts, `broadcast::channel(100)`
 
-Components:
-- **McpServer**: JSON-RPC handler (stdio transport)
-- **Protocol**: JsonRpcRequest/Response, JSON-RPC 2.0 spec
-- **ResourceHandler**: Convert session data → MCP resource URIs
-- **Resources supported**:
-  - `logpilot://session/{name}/summary` - incident summary
-  - `logpilot://session/{name}/entries` - recent log entries
-  - `logpilot://session/{name}/patterns` - detected patterns
-  - `logpilot://session/{name}/incidents` - active incidents
-  - `logpilot://session/{name}/alerts` - recent alerts
-
-### Layer 7: CLI (`src/cli/`)
-
-**Purpose**: User-facing commands
-
-Commands:
-- **watch**: Attach to tmux session; live log + analysis display
-- **summarize**: Aggregate patterns/incidents for time window
-- **ask**: AI-formatted query about logs (placeholder for LLM integration)
-- **mcp**: Start MCP server for Claude Code integration
-- **status**: Show monitored sessions and stats
-
-### Layer 8: Persistence (`src/buffer/`)
-
-**Purpose**: Long-term storage of high-severity events
-
-Components:
-- **Ring**: In-memory circular buffer (fixed size, FIFO eviction)
-- **Manager**: Coordinates ring + SQLite persistence
-- **Persistence**: SQLite schema (entries, patterns, incidents tables)
-
-**Note**: Currently infrastructure not wired to CLI; placeholder for future use.
-
-## Data Flow - Complete Request Cycle
-
-### Watch Command Flow
-
-```
-1. CLI: logpilot watch my-session
-   ├─ Create: LogEntry channel (mpsc)
-   ├─ Create: Analyzer (with patterns, incidents, alerts)
-   ├─ Create: SessionDataStore (global singleton)
-   ├─ Create: SessionRepository (tmux capture)
-   └─ Create: AlertEvaluator
-
-2. SessionRepository spawns tmux capture loop:
-   ├─ Run: tmux list-sessions / capture-pane -p
-   ├─ Poll every 100ms for new pane text
-   ├─ Emit: LogEntry (with sequence, timestamp)
-   └─ Send: log_tx channel
-
-3. Watch command reads channel:
-   ├─ Recv: LogEntry from log_rx
-   ├─ Call: Analyzer::process_entry()
-   │   ├─ Parse (JSON, logfmt, regex)
-   │   ├─ Cluster (dedup, detect new)
-   │   ├─ Track patterns
-   │   ├─ Detect incidents
-   │   └─ Return: AnalysisResult
-   ├─ Evaluate: AlertEvaluator::check()
-   │   └─ Emit: Alert via broadcast channel
-   ├─ Update: SessionDataStore::add_entry()
-   ├─ Display: Live TUI (via crossterm)
-   └─ Loop until 'q' key pressed
-```
-
-### MCP Server Flow
-
-```
-1. CLI: logpilot mcp-server
-   ├─ Create: McpServer
-   ├─ Get reference: SessionDataStore (global)
-   └─ Loop: Read JSON-RPC from stdin
-
-2. Receive: JSON-RPC request
-   ├─ Method: "initialize" → return capabilities
-   ├─ Method: "resources/list" → return supported URIs
-   ├─ Method: "resources/read" → query SessionDataStore
-   │   ├─ Parse URI (e.g., logpilot://session/my-session/entries)
-   │   ├─ Fetch: SessionData from DashMap
-   │   ├─ Format as JSON (uri, mimeType, text)
-   │   └─ Return: JSON-RPC success
-   └─ Reply: JSON-RPC response to stdout
-```
-
-## Key Abstractions & Interfaces
-
-### Error Handling
-
-- **LogPilotError**: Custom error enum with variants
-  - Io, Tmux, Database, Config, SessionNotFound
-  - Uses `thiserror` for Display + From traits
-- **Result<T>**: Type alias for `Result<T, LogPilotError>`
-- Pattern: Errors propagate with `?` operator
-
-### Configuration
-
-- **Config struct**: Root configuration (buffer, patterns, alerts, mcp)
-- **Load**: From `~/.config/logpilot/config.toml` or defaults
-- **Defaults**: 30-min buffer, 100MB memory, ErrorRate threshold 10/min
-
-### Async Patterns
-
-- **tokio::spawn**: Background tasks (SessionRepository, display loop)
-- **mpsc channels**: Single producer (tmux), multiple consumers (analyzer, display)
-- **broadcast channels**: Alerts → multiple subscribers (display, MCP)
-- **RwLock<T>**: Read-heavy analyzer state
-- **Mutex<T>**: Quit signal coordination
+**Pipeline (stub):**
+- Purpose: Documented producer-consumer wiring
+- Examples: `src/pipeline/mod.rs`
+- Pattern: unbounded sender only; real clustering lives in `ClusterEngine` used by `Analyzer`
 
 ## Entry Points
 
-1. **main.rs**: CLI dispatch
-   - Parses args (subcommand, flags)
-   - Routes to appropriate handler
-   - Error handling + exit codes
+**CLI binary `logpilot`:**
+- Location: `src/main.rs` (`[[bin]]` in `Cargo.toml`)
+- Triggers: `cargo run -- <subcommand>`, `just run`, installed binary; clap subcommands `watch`, `filter`, `summarize`, `ask`, `mcp-server`, `status`
+- Responsibilities: `tracing_subscriber::fmt::init()`, dispatch to `src/cli/*`; `watch` returns `LogPilotError`; other commands `eprintln` `anyhow`/`Result` errors and still exit 0 from `main`
 
-2. **cli/watch.rs**: Watch command entry
-   - Spawns all components
-   - Coordinates channels and threads
-   - Runs event loop
+**Library crate `logpilot`:**
+- Location: `src/lib.rs`
+- Triggers: integration tests (`tests/*.rs`, `tests/integration/*.rs`) via `use logpilot::...`; potential downstream crates
+- Responsibilities: public modules including `observability` (not compiled into the binary), `Config::load()`, re-exports `Analyzer`, `Pipeline`, `LogPilotError`
 
-3. **cli/mcp.rs**: MCP server entry
-   - Initializes McpServer
-   - Loops over stdin JSON-RPC requests
-   - Writes responses to stdout
+**MCP stdio server:**
+- Location: `src/cli/mcp.rs` → `src/mcp/server.rs` `run_stdio`
+- Triggers: `logpilot mcp-server`, `just mcp`; protocol tests spawn `./target/release/logpilot mcp-server` (`tests/test_mcp_protocol.rs`)
+- Responsibilities: JSON-RPC initialize/resources/tools; stderr banners; stale-session cleanup
 
-4. **cli/summarize.rs, ask.rs, status.rs**: Query/reporting
+**Watch interactive loop:**
+- Location: `src/cli/watch.rs` `run`
+- Triggers: `logpilot watch <session>`
+- Responsibilities: full capture→buffer→analyze→print loop, keyboard UX, persistence init
 
-## Configuration Schema (config.toml)
+**Direct tmux snapshot commands:**
+- Location: `src/cli/filter.rs`, `src/cli/ask.rs`
+- Triggers: `logpilot filter`, `logpilot ask`
+- Responsibilities: one-shot or streamed pane text without `SessionRepository` / `Analyzer` (ask uses `LogParser` only)
 
-```toml
-[buffer]
-duration_minutes = 30              # Rolling window
-max_memory_mb = 100                # In-memory limit
-persist_severity = ["ERROR", "FATAL"]
-persist_path = "~/.logpilot"
+**CI / test harness:**
+- Location: `.github/workflows/ci.yml`, `Justfile`, `tests/`
+- Triggers: GitHub Actions (fmt, clippy `-D warnings`, `cargo test --all-features` after `cargo build --release`); `just test` / `just ci`
+- Responsibilities: unit tests colocated in `src/**`; integration tests against library + MCP binary
 
-[patterns]
-custom_patterns = []               # User regex list
+## Error Handling
 
-[alerts]
-recurring_error_window_seconds = 60
-recurring_error_threshold = 5
-restart_loop_window_seconds = 30
-error_rate_threshold_per_minute = 10
+**Strategy:** Domain `LogPilotError` (`thiserror`) for capture/buffer/config; several CLI handlers use `anyhow::Result` and print to stderr; MCP maps failures to JSON-RPC error codes
 
-[mcp]
-enabled = true
-transport = "stdio"
-```
+**Patterns:**
+- Typed variants in `src/error.rs`: `Io`, `Tmux`, `Database` (from `sqlx::Error`), `DatabaseOp`, `Config`, `SessionNotFound`; constructors `tmux` / `config` / `db_op`
+- Watch persistence failure degrades to in-memory (`BufferManager::new_in_memory`) with `tracing::warn`
+- tmux target/path validation in `src/capture/tmux.rs` rejects shell metacharacters and `..` traversal before spawning commands
+- MCP: parse errors → `invalid_request` (-32600); unknown method → `method_not_found` (-32601); bad params → `invalid_params` (-32602); serde failures → `internal_error` (-32603)
+- Filter/watch spawn paths often `continue` on per-pane failures rather than aborting the whole session
+- `main` for filter/summarize/ask/mcp/status swallows handler errors after `eprintln`, so process exit status is success unless `watch` fails
 
-## External Dependencies (Key)
+## Cross-Cutting Concerns
 
-- **tokio**: Async runtime, channels, time utilities
-- **clap**: CLI argument parsing
-- **serde/serde_json**: Serialization
-- **sqlx**: SQLite database abstraction
-- **regex**: Pattern matching
-- **dashmap**: Concurrent HashMap
-- **crossterm**: Terminal UI interactions
-- **chrono**: Date/time
-- **tracing**: Structured logging
-- **uuid**: Unique identifiers
+**Logging:** `tracing` + `tracing_subscriber::fmt` initialized in `src/main.rs`. Capture/MCP/watch use `info`/`warn`/`error`/`debug`. `src/observability.rs` defines structured events (`log_capture_event`, `log_mcp_request`, `Metrics`) but no production module imports it. MCP protocol chatter is also `eprintln` from `src/cli/mcp.rs`.
+
+**Validation:** Clap for CLI args; duration parsers in summarize/ask; severity string maps in watch/filter/ask; regex compile errors become `LogPilotError::config`; MCP tools require non-empty `session`/`pattern`; tmux identifiers validated with `^[a-zA-Z0-9_\-\.:%]+$`.
+
+**Authentication:** None. Local process, stdio MCP, filesystem SQLite under the user data dir. No tokens, TLS, or multi-tenant isolation.
+
+---
+
+*Architecture analysis: 2026-08-26*
